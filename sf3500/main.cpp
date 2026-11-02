@@ -314,7 +314,7 @@ static Screen screen_play()
 		draw_text("X: switch mode", 410, 210, 12, 0xB0B0B0, ALIGN_LEFT, 1);
 	else if (mapPicked >= 0 && mapPicked < (int)maps.size())
 	{
-		char b[80];
+		char b[140];
 		snprintf(b, sizeof b, "Endless unlocks with a perfect\nscore on all three difficulties\nof this map  (%d / 3)", perfect_count(maps[mapPicked]));
 		draw_text(b, 410, 210, 12, 0xB0B0B0, ALIGN_LEFT, 1);
 	}
