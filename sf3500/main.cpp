@@ -347,7 +347,7 @@ static void draw_table(const std::string &mapId, int x, int y, int highlight, in
 	static const char *dif[3] = { "EASY", "NORMAL", "HARD" };
 	const std::vector<ScoreEntry> &t = scoreTables[mapId];
 	draw_text("DIFFICULTY", x + 40, y, 12, 0x909090, ALIGN_LEFT, 1);
-	draw_text("WAVE", x + 215, y, 12, 0x909090, ALIGN_RIGHT, 1);
+	draw_text("WAVE", x + 190, y, 12, 0x909090, ALIGN_RIGHT, 1);
 	draw_text("SCORE", x + 310, y, 12, 0x909090, ALIGN_RIGHT, 1);
 	fill_rect(x, y + 17, 320, 1, 0xF8DDC2);
 	for (int i = 0; i < SCORE_ROWS; i++)
@@ -363,15 +363,13 @@ static void draw_table(const std::string &mapId, int x, int y, int highlight, in
 		if (i < (int)t.size())
 		{
 			draw_text(dif[t[i].difficulty - 1], x + 40, ry, 16, col, ALIGN_LEFT, 0);
-			if (t[i].won)
-				snprintf(b, sizeof b, "WON");
-			else
-				snprintf(b, sizeof b, "%d / %d", t[i].waves + 1 > t[i].total ? t[i].total : t[i].waves + 1, t[i].total);
-			draw_text(b, x + 215, ry, 16, col, ALIGN_RIGHT, 0);
+			int reached = t[i].won ? t[i].total : (t[i].waves + 1 > t[i].total ? t[i].total : t[i].waves + 1);   /* a win shows 10 / 10 */
+			snprintf(b, sizeof b, "%d / %d", reached, t[i].total);
+			draw_text(b, x + 190, ry, 16, col, ALIGN_RIGHT, 0);
 			snprintf(b, sizeof b, "%d", t[i].score);
 			draw_text(b, x + 310, ry, 16, col, ALIGN_RIGHT, 0);
 			if (perfectBase > 0 && t[i].score >= (int)(perfectBase * diff_mult(t[i].difficulty)))
-				draw_text("PERFECT", x + 252, ry + 3, 10, 0xFFD400, ALIGN_RIGHT, 2);
+				draw_text("PERFECT", x + 248, ry + 3, 10, hl ? 0xFFFFFF : 0xFFD400, ALIGN_RIGHT, 2);
 		}
 		else
 			draw_text("---", x + 40, ry, 16, col, ALIGN_LEFT, 0);
