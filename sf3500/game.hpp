@@ -21,6 +21,11 @@ struct Sheet {
 
 class Map;
 
+/* how much tougher the creatures of a wave are than the map file says (endless mode) */
+struct WaveScale {
+	float hp = 1, speed = 1, count = 1, money = 1, damage = 1;
+};
+
 /* what happened in a match, for the sheet shown at the end */
 struct Stats {
 	int goldEarned = 0, goldSpent = 0, goldSold = 0;
@@ -50,7 +55,7 @@ struct TowerHit {
 
 class Enemy {
 public:
-	Enemy(const XNode &def, Map *map);
+	Enemy(const XNode &def, Map *map, const WaveScale &scale);
 	void display();
 	void displayGui();
 	void setWaypoints(const int *start, const int *end, const std::vector<std::pair<int, int> > &wps);
@@ -58,6 +63,7 @@ public:
 	void hitByTower(int damage, float freeze, Tower *tower, float multiplier);
 	void hitAnimation(const std::string &charset, int x);
 	bool alive() const { return enemyAlive; }
+	int maxHealthValue() const { return maxHealth; }
 	void calcFuture(int timeMs, float out[2]) const;
 
 	float moveComplete = 0, position[2];
@@ -90,7 +96,7 @@ private:
 
 class Wave {
 public:
-	Wave(int distance, const std::vector<const XNode *> &enemies, Map *map);
+	Wave(int distance, const std::vector<const XNode *> &enemies, Map *map, const WaveScale &scale);
 	~Wave();
 	void start();
 	void calcEnemyDistance();
@@ -107,9 +113,10 @@ private:
 
 class Waves {
 public:
-	Waves(const std::string &path, Map *map);
+	Waves(const std::string &path, Map *map, bool endless);
 	~Waves();
-	void nextWave() { started = true; waves[current]->start(); }
+	void nextWave() { started = true; waves[current]->start(); ensureNext(); }
+	void ensureNext();   /* endless: the wave after the current one is always made ready */
 	void waveComplete();
 	void displayGui() { if (started) waves[current]->displayGui(); }
 	std::vector<Wave *> waves;
@@ -117,6 +124,10 @@ public:
 	bool started = false;
 private:
 	Map *map;
+	bool endless;
+	XNode root;
+	std::vector<std::vector<const XNode *> > templates;
+	std::vector<int> spacing;
 };
 
 struct TowerType {
@@ -165,7 +176,7 @@ private:
 
 class Map {
 public:
-	Map(const std::string &mapPath, int difficulty);
+	Map(const std::string &mapPath, int difficulty, bool endless = false);
 	~Map();
 	void display();
 	bool canBuild(int x, int y) const;
@@ -192,7 +203,7 @@ public:
 	Stats stats;
 	float scoreMult() const { return difficulty == 1 ? 1.0f : difficulty == 2 ? 1.5f : 2.0f; }
 	int runningScore() const { return (int)((killPoints + wavesCleared * 100) * scoreMult()); }
-	bool ok = false;
+	bool ok = false, endless = false;
 
 	/* game flow */
 	void startMessage();

@@ -52,7 +52,7 @@ Sheet *CharSets::get(const std::string &file)
 }
 
 /* ------------------------------------------------------------------ enemy */
-Enemy::Enemy(const XNode &def, Map *m) : map(m)
+Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 {
 	position[0] = position[1] = -16;
 	moveVector[0] = moveVector[1] = 0;
@@ -60,10 +60,11 @@ Enemy::Enemy(const XNode &def, Map *m) : map(m)
 	tileSize = def.num("tilesize");
 	sheet = map->charSets.add(sheetFile, tileSize);
 	icon = map->charSets.add(def.str("icon"), -1);
-	maxHealth = health = def.num("maxhealth") * map->difficulty;
-	moveSpeed = def.num("movespeed");
-	money = def.num("money");
-	damage = def.num("damage") * map->difficulty;
+	maxHealth = health = (int)(def.num("maxhealth") * map->difficulty * sc.hp + 0.5f);
+	if (maxHealth < 1) maxHealth = health = 1;
+	moveSpeed = (int)(def.num("movespeed") * sc.speed + 0.5f);
+	money = (int)(def.num("money") * sc.money + 0.5f);
+	damage = (int)(def.num("damage") * map->difficulty * sc.damage + 0.5f);
 	animationSpeed = (float)def.num("animationspeed");
 	moveCount = millis();
 }
@@ -288,13 +289,13 @@ void Enemy::hitAnimation(const std::string &cs, int x)
 }
 
 /* ------------------------------------------------------------------ wave */
-Wave::Wave(int distance, const std::vector<const XNode *> &enemies, Map *map) : enemyDistance(distance)
+Wave::Wave(int distance, const std::vector<const XNode *> &enemies, Map *map, const WaveScale &scale) : enemyDistance(distance)
 {
 	wholeDistance = millis();
 	for (size_t i = 0; i < enemies.size(); i++)
-		for (int j = 0; j < enemies[i]->num("count"); j++)
+		for (int j = 0; j < (int)(enemies[i]->num("count") * scale.count + 0.5f); j++)
 		{
-			Enemy *e = new Enemy(*enemies[i], map);
+			Enemy *e = new Enemy(*enemies[i], map, scale);
 			if (j == 0)
 				nextIcons.push_back(e->icon);
 			list.push_back(e);
@@ -376,9 +377,8 @@ bool Wave::complete() const
 }
 
 /* ------------------------------------------------------------------ waves */
-Waves::Waves(const std::string &path, Map *m) : map(m)
+Waves::Waves(const std::string &path, Map *m, bool isEndless) : map(m), endless(isEndless)
 {
-	XNode root;
 	if (!xml_load(path + "/waves.xml", root))
 		return;
 	std::vector<const XNode *> ws = root.list("waves/wave");
@@ -388,21 +388,57 @@ Waves::Waves(const std::string &path, Map *m) : map(m)
 		for (size_t k = 0; k < ws[i]->kids.size(); k++)
 			if (ws[i]->kids[k].name == "enemy")
 				en.push_back(&ws[i]->kids[k]);
-		waves.push_back(new Wave(ws[i]->num("enemydistance"), en, m));
+		templates.push_back(en);
+		spacing.push_back(ws[i]->num("enemydistance"));
+		if (!endless)
+			waves.push_back(new Wave(spacing.back(), en, m, WaveScale()));
+	}
+	if (endless && !templates.empty())
+	{
+		waves.push_back(new Wave(spacing[0], templates[0], m, WaveScale()));
+		if (getenv("DM_ENDLESS_DUMP"))
+			for (int k = 0; k < 40; k++) { current = k; ensureNext(); }
+		current = 0;
 	}
 }
 Waves::~Waves() { for (size_t i = 0; i < waves.size(); i++) delete waves[i]; }
+
+/* Endless mode: wave w uses the map's wave w mod N as its pattern, and every creature gets tougher with each wave.
+ * The rates are in defensemania.cfg; the gold per kill grows slower than the health, so a run always ends. */
+void Waves::ensureNext()
+{
+	if (!endless || templates.empty() || current + 1 < (int)waves.size())
+		return;
+	int w = current + 1;
+	WaveScale sc;
+	sc.hp = powf(1.0f + (float)cfg_num("endless_hp_growth", 0.07), (float)w);
+	sc.speed = fminf(1.4f, 1.0f + (float)cfg_num("endless_speed_growth", 0.008) * w);
+	sc.count = fminf(2.5f, 1.0f + (float)cfg_num("endless_count_growth", 0.03) * w);
+	sc.money = 1.0f + (float)cfg_num("endless_money_growth", 0.05) * w;
+	sc.damage = 1.0f + (float)cfg_num("endless_damage_growth", 0.04) * w;
+	size_t t = (size_t)w % templates.size();
+	int dist = (int)(spacing[t] * fmaxf(0.6f, 1.0f - 0.01f * w));
+	waves.push_back(new Wave(dist, templates[t], map, sc));
+	if (getenv("DM_ENDLESS_DUMP"))   /* test hook: what each endless wave is made of */
+	{
+		int hp = 0;
+		for (size_t i = 0; i < waves.back()->list.size(); i++) hp += waves.back()->list[i]->maxHealthValue();
+		printf("endless wave %d: pattern %d, hp x%.2f speed x%.2f count x%.2f money x%.2f -> %d enemies, %d hp in all\n",
+		       w + 1, (int)t + 1, sc.hp, sc.speed, sc.count, sc.money, (int)waves.back()->list.size(), hp);
+	}
+}
 
 void Waves::waveComplete()
 {
 	if (waves[current]->complete() && !map->defeated)
 	{
 		map->wavesCleared = current + 1;
-		if (current + 1 >= (int)waves.size())
+		if (!endless && current + 1 >= (int)waves.size())
 			map->wonGame();
 		else
 		{
 			current++;
+			ensureNext();
 			map->continueNextWave();
 		}
 	}
@@ -675,8 +711,9 @@ void Tower::hitAnimation()
 /* ------------------------------------------------------------------ map */
 Map *g_map = NULL;
 
-Map::Map(const std::string &mapPath, int diff) : path(mapPath), difficulty(diff), charSets(mapPath)
+Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), difficulty(diff), charSets(mapPath)
 {
+	endless = isEndless;
 	g_map = this;
 	size_t slash = mapPath.rfind('/');
 	id = mapPath.substr(slash == std::string::npos ? 0 : slash + 1);
@@ -784,7 +821,7 @@ Map::Map(const std::string &mapPath, int diff) : path(mapPath), difficulty(diff)
 	load_image("data/menu.png", hudMenu);
 	if (optHQ)
 		load_image("data/ray1.png", lightRay);
-	waves = new Waves(path, this);
+	waves = new Waves(path, this, endless);
 	ok = !waves->waves.empty();
 	startMessage();
 }
@@ -1000,9 +1037,12 @@ void Map::drawHud()
 	draw_text(b, 88, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
 	/* wave information, bottom right */
 	draw_image(hudBottom, SW - 400, SH - 50);
-	snprintf(b, sizeof b, "Wave %d of %d - next wave:", waves->current + 1, (int)waves->waves.size());
+	if (endless)
+		snprintf(b, sizeof b, "Wave %d - next wave:", waves->current + 1);
+	else
+		snprintf(b, sizeof b, "Wave %d of %d - next wave:", waves->current + 1, (int)waves->waves.size());
 	draw_text(b, SW - 358, SH - 30, 11, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
-	if (waves->current + 1 < (int)waves->waves.size())
+	if (waves->current + 1 < (int)waves->waves.size() && waves->waves[waves->current + 1])
 	{
 		Wave *nw = waves->waves[waves->current + 1];
 		for (size_t i = 0; i < nw->nextIcons.size(); i++)

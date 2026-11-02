@@ -30,6 +30,7 @@ static Image logo;
 static int difficulty = 2;       /* 1 easy, 2 normal, 3 hard */
 static int mapPicked = 0;
 static int lastMap = 0, lastDifficulty = 2;
+static bool playEndless = false, lastEndless = false;   /* the mode picked, and the mode of the match that just ended */
 
 static void draw_button(const char *label, int x, int y, int w, int h, bool active, int size = 20)
 {
@@ -98,6 +99,7 @@ static std::string music_folder_for(const std::string &url, const std::string &n
 struct ScoreEntry { int score = 0, difficulty = 2, waves = 0, total = 0; bool won = false; };
 static std::map<std::string, std::vector<ScoreEntry> > scoreTables;   /* by map id, best first */
 static const int SCORE_ROWS = 8;
+static std::map<std::string, int> perfectMask;   /* by map id: bit d-1 is set once difficulty d was played perfectly */
 
 static std::string map_id(const std::string &url) { std::string id = url; if (id.size() > 4 && id.compare(id.size() - 4, 4, ".xml") == 0) id.resize(id.size() - 4); return id; }
 static std::string scores_path() { const char *h = getenv("HOME"); return std::string(h ? h : ".") + "/.defensemania_scores"; }
@@ -110,12 +112,20 @@ static void load_scores()
 	char line[200], id[64];
 	int diff, score, waves, total, won;
 	while (fgets(line, sizeof line, f))
+	{
+		int mask;
+		if (sscanf(line, "perfect %63s %d", id, &mask) == 2)
+		{
+			perfectMask[id] |= mask;
+			continue;
+		}
 		if (sscanf(line, "%63s %d %d %d %d %d", id, &diff, &score, &waves, &total, &won) == 6)
 		{
 			ScoreEntry e;
 			e.score = score; e.difficulty = diff; e.waves = waves; e.total = total; e.won = won != 0;
 			scoreTables[id].push_back(e);
 		}
+	}
 	fclose(f);
 }
 
@@ -124,6 +134,8 @@ static void save_scores()
 	FILE *f = fopen(scores_path().c_str(), "w");
 	if (!f)
 		return;
+	for (std::map<std::string, int>::const_iterator pm = perfectMask.begin(); pm != perfectMask.end(); ++pm)
+		fprintf(f, "perfect %s %d\n", pm->first.c_str(), pm->second);
 	for (std::map<std::string, std::vector<ScoreEntry> >::const_iterator it = scoreTables.begin(); it != scoreTables.end(); ++it)
 		for (size_t i = 0; i < it->second.size(); i++)
 		{
@@ -161,19 +173,21 @@ struct Result {
 	int rank = -1;               /* place in the table, -1 when it did not make it */
 	Stats stats;
 	std::vector<std::string> towerNames;
+	bool endless = false;
 };
 
 static float diff_mult(int d) { return d == 1 ? 1.0f : d == 2 ? 1.5f : 2.0f; }
 
 static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
 {
+	r.endless = m->endless;
 	const std::string &name = info.name;
 	r.mapName = name;
 	r.mapId = m->id;
 	r.difficulty = m->difficulty;
 	r.kills = m->killPoints;
 	r.wavesCleared = m->wavesCleared;
-	r.totalWaves = (int)m->waves->waves.size();
+	r.totalWaves = m->endless ? 0 : (int)m->waves->waves.size();
 	r.lives = m->lifes;
 	r.money = m->money;
 	r.stats = m->stats;
@@ -183,15 +197,35 @@ static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
 	r.won = won;
 	r.mult = m->scoreMult();
 	r.waveBonus = r.wavesCleared * 100;
-	r.winBonus = won ? 1000 : 0;
-	r.lifeBonus = won ? r.lives * 100 : 0;
-	r.perfectBase = info.perfectBase;
-	r.perfect = (int)(info.perfectBase * r.mult);
+	r.winBonus = won && !m->endless ? 1000 : 0;
+	r.lifeBonus = won && !m->endless ? r.lives * 100 : 0;
+	r.perfectBase = m->endless ? 0 : info.perfectBase;
+	r.perfect = (int)(r.perfectBase * r.mult);
 	r.score = (int)((r.kills + r.waveBonus + r.winBonus + r.lifeBonus) * r.mult);
 	ScoreEntry e;
 	e.score = r.score; e.difficulty = r.difficulty; e.waves = r.wavesCleared; e.total = r.totalWaves; e.won = won;
-	r.rank = add_score(r.mapId, e);
+	r.rank = add_score(m->endless ? "endless:" + r.mapId : r.mapId, e);
+	if (!m->endless && r.perfect > 0 && r.score >= r.perfect)   /* remembered for good, for the endless unlock */
+	{
+		perfectMask[r.mapId] |= 1 << (r.difficulty - 1);
+		save_scores();
+	}
 }
+
+
+/* Endless mode of a map opens once all three difficulties of it have been played perfectly. */
+static int perfect_bits(const MapInfo &m)
+{
+	std::string id = map_id(m.url);
+	int bits = perfectMask.count(id) ? perfectMask[id] : 0;
+	const std::vector<ScoreEntry> &t = scoreTables[id];
+	for (size_t i = 0; i < t.size(); i++)
+		if (t[i].won && m.perfectBase > 0 && t[i].score >= (int)(m.perfectBase * diff_mult(t[i].difficulty)))
+			bits |= 1 << (t[i].difficulty - 1);
+	return bits;
+}
+static int perfect_count(const MapInfo &m) { int b = perfect_bits(m), n = 0; for (int i = 0; i < 3; i++) n += (b >> i) & 1; return n; }
+static bool endless_unlocked(const MapInfo &m) { return cfg_num("endless_unlocked", 0) != 0 || perfect_bits(m) == 7; }
 
 static void load_maps()
 {
@@ -269,11 +303,25 @@ static Screen screen_play()
 		if (on)
 			rect_outline(listX - 4, y - 4, 308, 31, 0x89F9FF, 150);
 	}
+	bool unlocked = mapPicked >= 0 && mapPicked < (int)maps.size() && endless_unlocked(maps[mapPicked]);
+	if (!unlocked)
+		playEndless = false;
 	if (mapPicked >= 0 && mapPicked < (int)maps.size() && maps[mapPicked].logo.valid())
 		draw_image(maps[mapPicked].logo, SW - 70 - maps[mapPicked].logo.w, 98);
+	draw_text("MODE", 410, 166, 11, 0x909090, ALIGN_LEFT, 1);
+	draw_text(playEndless ? "ENDLESS" : "CAMPAIGN", 410, 180, 20, playEndless ? 0xFFE066 : 0xFFFFFF, ALIGN_LEFT, 0);
+	if (unlocked)
+		draw_text("X: switch mode", 410, 210, 12, 0xB0B0B0, ALIGN_LEFT, 1);
+	else if (mapPicked >= 0 && mapPicked < (int)maps.size())
+	{
+		char b[80];
+		snprintf(b, sizeof b, "Endless unlocks with a perfect\nscore on all three difficulties\nof this map  (%d / 3)", perfect_count(maps[mapPicked]));
+		draw_text(b, 410, 210, 12, 0xB0B0B0, ALIGN_LEFT, 1);
+	}
 	draw_button("BACK", 40, SH - 54, 110, 26, false, 20);
 	draw_button("PLAY", SW - 150, SH - 54, 110, 26, true, 20);
-	draw_hint("Up/Down: map    Left/Right: difficulty    A: play    B: back");
+	draw_hint("Up/Down: map    Left/Right: difficulty    X: mode    A: play    B: back");
+	if (pressed(JK_X) && unlocked) playEndless = !playEndless;
 	if (pressed(JK_UP) && mapPicked > 0) mapPicked--;
 	if (pressed(JK_DOWN) && mapPicked + 1 < (int)maps.size()) mapPicked++;
 	if (pressed(JK_LEFT) && difficulty > 1) difficulty--;
@@ -364,7 +412,10 @@ static void draw_table(const std::string &mapId, int x, int y, int highlight, in
 		{
 			draw_text(dif[t[i].difficulty - 1], x + 40, ry, 16, col, ALIGN_LEFT, 0);
 			int reached = t[i].won ? t[i].total : (t[i].waves + 1 > t[i].total ? t[i].total : t[i].waves + 1);   /* a win shows 10 / 10 */
-			snprintf(b, sizeof b, "%d / %d", reached, t[i].total);
+			if (t[i].total == 0)   /* endless: no end to count to */
+				snprintf(b, sizeof b, "%d", t[i].waves + 1);
+			else
+				snprintf(b, sizeof b, "%d / %d", reached, t[i].total);
 			draw_text(b, x + 190, ry, 16, col, ALIGN_RIGHT, 0);
 			snprintf(b, sizeof b, "%d", t[i].score);
 			draw_text(b, x + 310, ry, 16, col, ALIGN_RIGHT, 0);
@@ -377,22 +428,28 @@ static void draw_table(const std::string &mapId, int x, int y, int highlight, in
 }
 
 static int scoresMap = 0;
+static bool scoresEndless = false;
 
 static Screen screen_scores()
 {
 	gfx_clear(0, 0, 0);
-	draw_text("HIGH SCORES", SW / 2, 12, 24, 0xFFFFFF, ALIGN_CENTER, 0);
+	draw_text(scoresEndless ? "HIGH SCORES  -  ENDLESS" : "HIGH SCORES", SW / 2, 12, 24, scoresEndless ? 0xFFE066 : 0xFFFFFF, ALIGN_CENTER, 0);
 	if (maps.empty())
 		return S_MAIN;
 	draw_text(std::string("<  ") + maps[scoresMap].name + "  >", SW / 2, 48, 18, 0x89F9FF, ALIGN_CENTER, 0);
-	char pf[96];
 	int pb = maps[scoresMap].perfectBase;
-	snprintf(pf, sizeof pf, "Perfect score:   Easy %d   Normal %d   Hard %d", (int)(pb * 1.0f), (int)(pb * 1.5f), (int)(pb * 2.0f));
+	char pf[110];
+	if (scoresEndless)
+		snprintf(pf, sizeof pf, "Best wave reached on this map. The waves never stop.");
+	else
+		snprintf(pf, sizeof pf, "Perfect score:   Easy %d   Normal %d   Hard %d     (%d / 3 played perfectly)", (int)(pb * 1.0f), (int)(pb * 1.5f), (int)(pb * 2.0f), perfect_count(maps[scoresMap]));
 	draw_text(pf, SW / 2, 72, 12, 0xFFE066, ALIGN_CENTER, 1);
-	draw_table(map_id(maps[scoresMap].url), (SW - 320) / 2, 98, -1, pb);
-	draw_hint("Left/Right: map    B: back");
+	std::string key = map_id(maps[scoresMap].url);
+	draw_table(scoresEndless ? "endless:" + key : key, (SW - 320) / 2, 98, -1, scoresEndless ? 0 : pb);
+	draw_hint("Left/Right: map    X: campaign / endless    B: back");
 	if ((pressed(JK_LEFT) || pressed(JK_UP)) && scoresMap > 0) scoresMap--;
 	if ((pressed(JK_RIGHT) || pressed(JK_DOWN)) && scoresMap + 1 < (int)maps.size()) scoresMap++;
+	if (pressed(JK_X) || pressed(JK_Y)) scoresEndless = !scoresEndless;
 	if (pressed(JK_B) || pressed(JK_START)) return S_MAIN;
 	return S_SCORES;
 }
@@ -401,7 +458,7 @@ static void draw_stats(const Result &r)
 {
 	const Stats &st = r.stats;
 	char b[64];
-	draw_text(r.won ? "VICTORY!" : "DEFEATED", 24, 10, 30, r.won ? 0xFFE066 : 0xFF7070, ALIGN_LEFT, 0);
+	draw_text(r.endless ? "RUN OVER" : r.won ? "VICTORY!" : "DEFEATED", 24, 10, 30, r.endless || r.won ? 0xFFE066 : 0xFF7070, ALIGN_LEFT, 0);
 	draw_text("MATCH STATS", SW - 24, 20, 18, 0xFFFFFF, ALIGN_RIGHT, 0);
 	struct Col { int x; const char *head; } cols[3] = { { 24, "GOLD" }, { 232, "TOWERS" }, { 440, "ENEMIES" } };
 	for (int i = 0; i < 3; i++)
@@ -466,14 +523,14 @@ static Screen screen_after(Result &r, int &sel)
 		if (pressed(JK_A))
 		{
 			afterView = 0;
-			if (sel == 0) { mapPicked = lastMap; difficulty = lastDifficulty; return S_LOADING; }
+			if (sel == 0) { mapPicked = lastMap; difficulty = lastDifficulty; playEndless = lastEndless; return S_LOADING; }
 			if (sel == 1) return S_PLAY;
 			return S_QUIT;
 		}
 		return S_AFTER;
 	}
-	draw_text(r.won ? "VICTORY!" : "DEFEATED", 24, 10, 30, r.won ? 0xFFE066 : 0xFF7070, ALIGN_LEFT, 0);
-	draw_text(r.mapName + (r.difficulty == 1 ? "  -  Easy" : r.difficulty == 2 ? "  -  Normal" : "  -  Hard"), 24, 48, 12, 0xB0B0B0, ALIGN_LEFT, 1);
+	draw_text(r.endless ? "RUN OVER" : r.won ? "VICTORY!" : "DEFEATED", 24, 10, 30, r.endless ? 0xFFE066 : r.won ? 0xFFE066 : 0xFF7070, ALIGN_LEFT, 0);
+	draw_text(r.mapName + (r.endless ? "  -  Endless" : "") + (r.difficulty == 1 ? "  -  Easy" : r.difficulty == 2 ? "  -  Normal" : "  -  Hard"), 24, 48, 12, 0xB0B0B0, ALIGN_LEFT, 1);
 	char b[64];
 	int y = 72;
 	struct Line { const char *label; int value; } lines[4] = {
@@ -481,7 +538,7 @@ static Screen screen_after(Result &r, int &sel)
 		{ "Lives left", r.lifeBonus } };
 	for (int i = 0; i < 4; i++)
 	{
-		bool skip = !r.won && i >= 2;
+		bool skip = i >= 2 && (!r.won || r.endless);
 		draw_text(lines[i].label, 24, y, 13, skip ? 0x505050 : 0xE6E6E6, ALIGN_LEFT, 1);
 		snprintf(b, sizeof b, "%d", lines[i].value);
 		draw_text(b, 220, y, 13, skip ? 0x505050 : 0xE6E6E6, ALIGN_RIGHT, 1);
@@ -495,7 +552,14 @@ static Screen screen_after(Result &r, int &sel)
 	draw_text("TOTAL", 24, y + 2, 18, 0xFFE066, ALIGN_LEFT, 2);
 	snprintf(b, sizeof b, "%d", r.score);
 	draw_text(b, 220, y + 2, 18, 0xFFE066, ALIGN_RIGHT, 2);
-	if (r.perfect > 0)
+	if (r.endless)
+	{
+		snprintf(b, sizeof b, "You reached wave %d", r.wavesCleared + 1);
+		draw_text(b, 24, y + 34, 15, 0xFFE066, ALIGN_LEFT, 1);
+		if (r.rank >= 0)
+			draw_text(r.rank == 0 ? "NEW BEST RUN!" : "NEW HIGH SCORE!", 24, y + 56, 16, 0xFFD400, ALIGN_LEFT, 0);
+	}
+	else if (r.perfect > 0)
 	{
 		if (r.score >= r.perfect)
 			draw_text("PERFECT SCORE!", 24, y + 34, 18, 0xFFD400, ALIGN_LEFT, 0);
@@ -508,7 +572,7 @@ static Screen screen_after(Result &r, int &sel)
 		}
 	}
 
-	draw_table(r.mapId, 300, 14, r.rank, r.perfectBase);
+	draw_table(r.endless ? "endless:" + r.mapId : r.mapId, 300, 14, r.rank, r.perfectBase);
 
 	static const char *labels[3] = { "PLAY AGAIN", "BACK TO MENU", "EXIT GAME" };
 	int bw = 160, gap = (SW - bw * 3) / 4;
@@ -520,7 +584,7 @@ static Screen screen_after(Result &r, int &sel)
 	if (pressed(JK_A))
 	{
 		afterView = 0;
-		if (sel == 0) { mapPicked = lastMap; difficulty = lastDifficulty; return S_LOADING; }
+		if (sel == 0) { mapPicked = lastMap; difficulty = lastDifficulty; playEndless = lastEndless; return S_LOADING; }
 		if (sel == 1) return S_PLAY;
 		return S_QUIT;
 	}
@@ -873,7 +937,8 @@ int main()
 			lastDifficulty = difficulty;
 			delete play.map;
 			play = Play();
-			play.map = new Map("data/maps/" + maps[mapPicked].url, difficulty);
+			lastEndless = playEndless;
+			play.map = new Map("data/maps/" + maps[mapPicked].url, difficulty, playEndless);
 			play.cx = SW / 2;
 			play.cy = SH / 2;
 			if (getenv("DM_CURSOR"))   /* test hook: start the cursor at x,y on the screen */
@@ -907,7 +972,7 @@ int main()
 			if (play.map->finished)
 			{
 				afterSel = 0;
-				if (play.map->quitDialog && !play.map->finishedWon)
+				if (play.map->quitDialog && !play.map->finishedWon && !play.map->endless)
 					next = S_MAIN;   /* quit from the pause dialog goes straight back */
 				else
 				{
