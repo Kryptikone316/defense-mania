@@ -1,9 +1,11 @@
 /* Defense Mania for the Data Frog SF3500: menus, the pad cursor and the main loop. */
+#include "audio.hpp"
 #include "game.hpp"
 #include "hwdisp.hpp"
 #include "joykey.hpp"
 
 #include <SDL.h>
+#include <sys/stat.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +38,56 @@ static void draw_button(const char *label, int x, int y, int w, int h, bool acti
 }
 
 static void draw_hint(const char *s) { draw_text(s, SW / 2, SH - 16, 10, 0xB0B0B0, ALIGN_CENTER, 1); }
+
+/* ------------------------------------------------------------------ saved options and music folders */
+static std::string settings_path()
+{
+	const char *home = getenv("HOME");
+	return std::string(home ? home : ".") + "/.defensemania_settings";
+}
+
+static void load_settings()
+{
+	FILE *f = fopen(settings_path().c_str(), "r");
+	if (!f)
+		return;
+	char line[100], key[40];
+	int v;
+	while (fgets(line, sizeof line, f))
+		if (sscanf(line, " %39[a-z_] = %d", key, &v) == 2)
+		{
+			if (!strcmp(key, "hq")) optHQ = v != 0;
+			else if (!strcmp(key, "fps")) optShowFps = v != 0;
+			else if (!strcmp(key, "music")) music_set_enabled(v != 0);
+			else if (!strcmp(key, "music_volume")) music_set_volume(v);
+		}
+	fclose(f);
+}
+
+static void save_settings()
+{
+	FILE *f = fopen(settings_path().c_str(), "w");
+	if (!f)
+		return;
+	fprintf(f, "hq = %d\nfps = %d\nmusic = %d\nmusic_volume = %d\n", optHQ, optShowFps, music_enabled(), music_volume());
+	fclose(f);
+}
+
+static bool dir_exists(const std::string &p) { struct stat st; return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode); }
+
+/* the folder of tracks that goes with a map, Conquest when it has none of its own */
+static std::string music_folder_for(const std::string &url, const std::string &name)
+{
+	std::string id = url;
+	if (id.size() > 4 && id.compare(id.size() - 4, 4, ".xml") == 0)
+		id.resize(id.size() - 4);
+	if (id == "mountains") return "Mountain";
+	if (id == "maze") return "The Maze";
+	if (id == "woods") return "Dark Woods";
+	if (id == "river_side") return "River Side";
+	if (dir_exists("music/" + name)) return name;
+	return "Conquest";
+}
 
 static void load_maps()
 {
@@ -116,27 +168,42 @@ static Screen screen_play()
 static Screen screen_options(int &sel)
 {
 	gfx_clear(0, 0, 0);
-	const char *name[2] = { "HQ GRAPHICS", "SHOW FPS" };
-	const char *help[2] = { "Adds a light overlay on the map: this costs\nperformance. Takes effect on the next match.", "Shows the current frame rate." };
-	bool on[2] = { optHQ, optShowFps };
-	for (int i = 0; i < 2; i++)
+	const char *name[4] = { "HQ GRAPHICS", "SHOW FPS", "MUSIC", "VOLUME" };
+	const char *help[4] = {
+		"Adds a light overlay on the map: this costs\nperformance. Takes effect on the next match.",
+		"Shows the current frame rate.",
+		"Background music, a track from the folder\nof the map in the music folder.",
+		"Left/Right changes the music volume." };
+	char vol[16];
+	snprintf(vol, sizeof vol, "%d%%", music_volume());
+	std::string state[4] = { optHQ ? "ON" : "OFF", optShowFps ? "ON" : "OFF", music_enabled() ? "ON" : "OFF", vol };
+	bool on[4] = { optHQ, optShowFps, music_enabled(), music_volume() > 0 };
+	for (int i = 0; i < 4; i++)
 	{
-		int y = 50 + i * 76;
-		draw_button(name[i], 40, y, 190, 26, i == sel || on[i], 20);
-		draw_text(on[i] ? "ON" : "OFF", 250, y + 3, 16, on[i] ? 0x89F9FF : 0x909090, ALIGN_LEFT, 0);
-		draw_text(help[i], 300, y + 2, 11, 0xE6E6E6, ALIGN_LEFT, 1);
+		int y = 26 + i * 62;
+		draw_button(name[i], 40, y, 190, 26, i == sel || (on[i] && i < 3), 20);
+		draw_text(state[i], 250, y + 3, 16, on[i] ? 0x89F9FF : 0x909090, ALIGN_LEFT, 0);
+		draw_text(help[i], 330, y + 2, 11, 0xE6E6E6, ALIGN_LEFT, 1);
 		if (i == sel)
-			rect_outline(34, y - 6, SW - 68, 40, 0x89F9FF, 120);
+			rect_outline(34, y - 7, SW - 68, 42, 0x89F9FF, 120);
 	}
 	draw_button("BACK", 40, SH - 54, 110, 26, false, 20);
-	draw_hint("Up/Down: choose    A: switch    B: back");
-	if (pressed(JK_UP)) sel = 0;
-	if (pressed(JK_DOWN)) sel = 1;
+	draw_hint("Up/Down: choose    A: switch    Left/Right: volume    B: back");
+	if (pressed(JK_UP) && sel > 0) sel--;
+	if (pressed(JK_DOWN) && sel < 3) sel++;
 	if (pressed(JK_A))
 	{
-		if (sel == 0) optHQ = !optHQ; else optShowFps = !optShowFps;
+		if (sel == 0) optHQ = !optHQ;
+		else if (sel == 1) optShowFps = !optShowFps;
+		else if (sel == 2) music_set_enabled(!music_enabled());
 	}
-	if (pressed(JK_B)) return S_MAIN;
+	if (sel == 3 && pressed(JK_LEFT)) music_set_volume(music_volume() - 10);
+	if (sel == 3 && pressed(JK_RIGHT)) music_set_volume(music_volume() + 10);
+	if (pressed(JK_B))
+	{
+		save_settings();
+		return S_MAIN;
+	}
 	return S_OPTIONS;
 }
 
@@ -461,6 +528,9 @@ int main()
 	load_maps();
 	optShowFps = cfg_num("show_fps", 0) != 0;
 	optHQ = cfg_num("hq_graphics", 0) != 0;
+	audio_init();
+	load_settings();
+	music_play_folder("Conquest");
 
 	Screen screen = S_MAIN;
 	int mainSel = 0, optSel = 0, afterSel = 0;
@@ -516,6 +586,7 @@ int main()
 			{
 				next = S_GAME;
 				padPrev = padNow = gfx_pad();
+				music_play_folder(music_folder_for(maps[mapPicked].url, maps[mapPicked].name));
 			}
 			break;
 		case S_GAME:
@@ -532,6 +603,7 @@ int main()
 				delete play.map;
 				play.map = NULL;
 				grade_set_map("");
+				music_play_folder("Conquest");
 			}
 			break;
 		default: break;
@@ -545,6 +617,7 @@ int main()
 			snprintf(b, sizeof b, "%dx%d @ %d fps", SW, SH, fps);
 			draw_text(b, SW - 4, 2, 10, 0xFFFFFF, ALIGN_RIGHT, 1);
 		}
+		music_update();
 		fpsFrames++;
 		if (millis() - fpsStamp >= 1000)
 		{
@@ -558,6 +631,8 @@ int main()
 			SDL_Delay(25 - spent);
 	}
 	delete play.map;
+	save_settings();
+	audio_shutdown();
 	hwdisp_deinit();
 	SDL_Quit();
 	return 0;
