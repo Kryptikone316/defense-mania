@@ -462,7 +462,7 @@ int main()
 	optShowFps = cfg_num("show_fps", 0) != 0;
 	optHQ = cfg_num("hq_graphics", 0) != 0;
 
-	Screen screen = S_MAIN, prevScreen = S_QUIT;
+	Screen screen = S_MAIN;
 	int mainSel = 0, optSel = 0, afterSel = 0;
 	bool afterWon = false;
 	Play play;
@@ -501,6 +501,8 @@ int main()
 			play.map = new Map("data/maps/" + maps[mapPicked].url, difficulty);
 			play.cx = SW / 2;
 			play.cy = SH / 2;
+			if (getenv("DM_CURSOR"))   /* test hook: start the cursor at x,y on the screen */
+				sscanf(getenv("DM_CURSOR"), "%f,%f", &play.cx, &play.cy);
 			play.started = (int)millis();
 			camX = camY = 0;
 			if (!play.map->ok)
