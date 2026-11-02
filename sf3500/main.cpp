@@ -172,7 +172,8 @@ static Screen screen_options(int &sel)
 	const char *help[4] = {
 		"Adds a light overlay on the map: this costs\nperformance. Takes effect on the next match.",
 		"Shows the current frame rate.",
-		"Background music, a track from the folder\nof the map in the music folder.",
+		dir_exists("music") ? "Background music, a track from the folder\nof the map in the music folder."
+		                    : "No music pack installed. Put its music folder\nnext to the game to hear it (optional).",
 		"Left/Right changes the music volume." };
 	char vol[16];
 	snprintf(vol, sizeof vol, "%d%%", music_volume());
