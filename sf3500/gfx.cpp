@@ -513,7 +513,7 @@ int text_width(const std::string &s, int size, int font)
 	return best;
 }
 
-void draw_text(const std::string &s, int x, int y, int size, uint32_t rgb, int align, int font, int alpha)
+void draw_text(const std::string &s, int x, int y, int size, uint32_t rgb, int align, int font, int alpha, int outline)
 {
 	TTF_Font *f = get_font(font, size);
 	if (!f)
@@ -535,25 +535,31 @@ void draw_text(const std::string &s, int x, int y, int size, uint32_t rgb, int a
 				if (align == ALIGN_CENTER) dx = x - t->w / 2;
 				else if (align == ALIGN_RIGHT) dx = x - t->w;
 				SDL_LockSurface(t);
-				int r = col.r, g = col.g, b = col.b;
-				for (int yy = 0; yy < t->h; yy++)
-				{
-					int py = dy + yy;
-					if (py < 0 || py >= SH)
-						continue;
-					const Uint8 *src = (const Uint8 *)t->pixels + yy * t->pitch;
-					for (int xx = 0; xx < t->w; xx++)
+				static const int ring[8][2] = { {-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1} };
+				for (int pass = outline >= 0 ? 0 : 1; pass < 2; pass++)
+					for (int o = 0; o < (pass == 0 ? 8 : 1); o++)
 					{
-						int pxx = dx + xx;
-						if (src[xx] && pxx >= 0 && pxx < SW)
+						int ox = pass == 0 ? ring[o][0] : 0, oy = pass == 0 ? ring[o][1] : 0;
+						int r = pass == 0 ? (outline >> 16 & 255) : col.r, g = pass == 0 ? (outline >> 8 & 255) : col.g, b = pass == 0 ? (outline & 255) : col.b;
+						for (int yy = 0; yy < t->h; yy++)
 						{
-							if (alpha >= 250)
-								fb[(size_t)py * SW + pxx] = pack565(r, g, b);
-							else
-								blend_px(&fb[(size_t)py * SW + pxx], r, g, b, alpha);
+							int py = dy + yy + oy;
+							if (py < 0 || py >= SH)
+								continue;
+							const Uint8 *src = (const Uint8 *)t->pixels + yy * t->pitch;
+							for (int xx = 0; xx < t->w; xx++)
+							{
+								int pxx = dx + xx + ox;
+								if (src[xx] && pxx >= 0 && pxx < SW)
+								{
+									if (alpha >= 250)
+										fb[(size_t)py * SW + pxx] = pack565(r, g, b);
+									else
+										blend_px(&fb[(size_t)py * SW + pxx], r, g, b, alpha);
+								}
+							}
 						}
 					}
-				}
 				SDL_UnlockSurface(t);
 				SDL_FreeSurface(t);
 			}

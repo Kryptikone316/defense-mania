@@ -56,7 +56,7 @@ void circle_outline(float cx, float cy, float r, uint32_t rgb, int alpha = 255);
 enum { ALIGN_LEFT = 0, ALIGN_CENTER = 1, ALIGN_RIGHT = 2 };
 /* font: 0 = Bitter (menus and titles), 1 = DejaVu Sans, 2 = DejaVu Sans Bold. Lines are split at '\n'. */
 void draw_text(const std::string &s, int x, int y, int size, uint32_t rgb, int align = ALIGN_LEFT,
-               int font = 0, int alpha = 255);
+               int font = 0, int alpha = 255, int outline = -1);   /* outline: a 0xRRGGBB colour for a 1 pixel border, -1 for none */
 int text_width(const std::string &s, int size, int font = 0);
 int text_lineheight(int size, int font = 0);
 

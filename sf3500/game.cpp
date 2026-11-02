@@ -901,8 +901,7 @@ void Map::loseGame() { actionTimer = millis(); action = 4; defeated = true; glob
 
 static void big_text(const char *s, int size, int yoff = 0)
 {
-	draw_text(s, SW / 2 - 1, SH / 2 + yoff - 1, size, 0x000000, ALIGN_CENTER, 2);
-	draw_text(s, SW / 2, SH / 2 + yoff, size, 0xFFFFFF, ALIGN_CENTER, 2);
+	draw_text(s, SW / 2, SH / 2 + yoff, size, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }
 
 void Map::displayActions()
@@ -943,8 +942,7 @@ void Map::displayActions()
 	case 5:
 		if (dt <= 5000)
 		{
-			draw_text("The game will start when\nyou build the first tower", SW / 2 - 1, SH / 2 - 24 + 1, 17, 0x000000, ALIGN_CENTER, 1);
-			draw_text("The game will start when\nyou build the first tower", SW / 2, SH / 2 - 24, 17, 0xFFFFFF, ALIGN_CENTER, 1);
+			draw_text("The game will start when\nyou build the first tower", SW / 2, SH / 2 - 24, 17, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 		}
 		break;
 	}
@@ -957,17 +955,14 @@ void Map::drawHud()
 	draw_image(moneyImg, 8, 9);
 	char b[32];
 	snprintf(b, sizeof b, "%d", money);
-	draw_text(b, 27, 9, 13, 0x000000, ALIGN_LEFT, 2, 180);
-	draw_text(b, 26, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2);
+	draw_text(b, 26, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
 	draw_image(lifeImg, 70, 11);
 	snprintf(b, sizeof b, "%d", lifes);
-	draw_text(b, 89, 9, 13, 0x000000, ALIGN_LEFT, 2, 180);
-	draw_text(b, 88, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2);
+	draw_text(b, 88, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
 	/* wave information, bottom right */
 	draw_image(hudBottom, SW - 400, SH - 50);
 	snprintf(b, sizeof b, "Wave %d of %d - next wave:", waves->current + 1, (int)waves->waves.size());
-	draw_text(b, SW - 357, SH - 28, 10, 0x000000, ALIGN_LEFT, 1, 180);
-	draw_text(b, SW - 358, SH - 29, 10, TEXT_GOLD, ALIGN_LEFT, 1);
+	draw_text(b, SW - 358, SH - 30, 11, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
 	if (waves->current + 1 < (int)waves->waves.size())
 	{
 		Wave *nw = waves->waves[waves->current + 1];
@@ -979,7 +974,7 @@ void Map::drawHud()
 	draw_image(pause ? hudPlay : hudPause, 13, SH - 49);
 	draw_image(hudBuild, 65, SH - 47);
 	draw_image(hudMenu, 105, SH - 47);
-	draw_text("START", 31, SH - 12, 9, 0xFFFFFF, ALIGN_CENTER, 1);
-	draw_text("X", 76, SH - 12, 9, 0xFFFFFF, ALIGN_CENTER, 1);
-	draw_text("SELECT", 119, SH - 12, 9, 0xFFFFFF, ALIGN_CENTER, 1);
+	draw_text("START", 31, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
+	draw_text("X", 76, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
+	draw_text("SELECT", 119, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }

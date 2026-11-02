@@ -292,10 +292,11 @@ static void radial_geometry(const Play &p, int count, int iconSize, float &x, fl
 
 static void info_box(const std::string &text)
 {
-	int w = text_width(text, 10, 1) + 14, h = text_lineheight(10, 1) * 2 + 8;
+	int w = text_width(text, 11, 2) + 16, h = text_lineheight(11, 2) * 2 + 10;
 	int x = SW - 10 - w, y = SH - 64 - h;
-	fill_rect(x, y, w, h, 0x000000, 170);
-	draw_text(text, x + 7, y + 4, 10, 0xFFFFFF, ALIGN_LEFT, 1);
+	fill_rect(x, y, w, h, 0x000000, 200);
+	rect_outline(x, y, w, h, 0x89F9FF, 120);
+	draw_text(text, x + 8, y + 5, 11, 0xFFFFFF, ALIGN_LEFT, 2);
 }
 
 static void draw_radial(const Play &p)
@@ -329,12 +330,18 @@ static void draw_radial(const Play &p)
 			if (i == 2) cost = (int)(t->costs * 0.8);
 		}
 		if (i == p.menuSel)
-			fill_circle(ix, iy, iconSize / 2 + 5.0f, 0x89F9FF, 90);
+		{
+			int pulse = 120 + (int)(80 * (0.5f + 0.5f * sinf(millis() / 120.0f)));
+			fill_circle(ix, iy, iconSize / 2 + 6.0f, 0xFFD400, pulse);
+			for (int k = 0; k < 3; k++)
+				circle_outline(ix, iy, iconSize / 2 + 6.0f + k, 0xFFD400, 255);
+			circle_outline(ix, iy, iconSize / 2 + 9.0f, 0x000000, 200);
+		}
 		draw_image_center(*img, ix, iy, 0, 0, -1, -1, dim ? 200 : 255, dim ? 0x969696 : 0xFFFFFF);
 		char b[24];
 		snprintf(b, sizeof b, "%d $", cost);
-		fill_rect((int)(ix - iconSize * 0.4f), (int)(iy + iconSize / 2 - 2), (int)(iconSize * 0.8f), 11, 0x000000, 190);
-		draw_text(b, (int)ix, (int)(iy + iconSize / 2 - 2), 9, 0xFFFFFF, ALIGN_CENTER, 1);
+		fill_rect((int)(ix - iconSize * 0.5f), (int)(iy + iconSize / 2 - 3), (int)iconSize, 13, 0x000000, 200);
+		draw_text(b, (int)ix, (int)(iy + iconSize / 2 - 3), 10, 0xFFFFFF, ALIGN_CENTER, 2);
 	}
 	if (p.menuKind == 1)
 	{
@@ -503,7 +510,7 @@ static void play_draw(Play &p)
 	if (m->pause && !m->quitDialog)
 		draw_text("PAUSED", SW / 2, SH / 2 - 14, 28, 0xFFFFFF, ALIGN_CENTER, 2);
 	if (p.speed2 && !m->pause)
-		draw_text("x2", SW - 14, 8, 14, 0xFFE066, ALIGN_RIGHT, 2);
+		draw_text("x2", SW - 70, 19, 14, 0xFFE066, ALIGN_RIGHT, 2, 255, 0x000000);
 	if (m->quitDialog)
 	{
 		fill_rect(SW / 2 - 150, SH / 2 - 56, 300, 112, 0x000000, 190);
@@ -514,7 +521,7 @@ static void play_draw(Play &p)
 	}
 	else if (!p.menuKind && !m->gameStarted && (int)millis() - p.started < 15000 && !m->pause)
 		draw_text("D-Pad: move   A: build / select   B: cancel   X: show build spots   R1: x2 speed   Start: pause   Select: menu",
-		          SW / 2, SH - 82, 9, 0xFFFFFF, ALIGN_CENTER, 1, 170);
+		          SW / 2, SH - 84, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }
 
 /* ------------------------------------------------------------------ main */
@@ -616,7 +623,7 @@ int main()
 		{
 			char b[48];
 			snprintf(b, sizeof b, "%dx%d @ %d fps", SW, SH, fps);
-			draw_text(b, SW - 4, 2, 10, 0xFFFFFF, ALIGN_RIGHT, 1);
+			draw_text(b, SW - 70, 3, 11, 0xFFFFFF, ALIGN_RIGHT, 2, 255, 0x000000);   /* left of TreeFrogUI's battery icon */
 		}
 		music_update();
 		fpsFrames++;
