@@ -136,6 +136,7 @@ void Enemy::checkWP()
 		if (reachingEndpoint)
 		{
 			map->lifes--;
+			map->stats.enemiesLeaked++;
 			sfx_play(SFX_LIFELOST);
 			if (map->lifes == 0)
 				map->loseGame();
@@ -246,6 +247,9 @@ void Enemy::getDamage(int dmg, float freeze)
 		enemyAlive = false;
 		dieCount = millis();
 		map->money += money;
+		map->killPoints += money * 5;
+		map->stats.goldEarned += money;
+		map->stats.enemiesDefeated++;
 		sfx_play(SFX_DIE);
 	}
 }
@@ -389,6 +393,7 @@ void Waves::waveComplete()
 {
 	if (waves[current]->complete() && !map->defeated)
 	{
+		map->wavesCleared = current + 1;
 		if (current + 1 >= (int)waves.size())
 			map->wonGame();
 		else
@@ -449,6 +454,8 @@ void Tower::repair()
 	if (map->money >= repairCosts() && health < maxHealth)
 	{
 		map->money -= repairCosts();
+		map->stats.goldSpent += repairCosts();
+		map->stats.repairs++;
 		health = maxHealth;
 		sfx_play(SFX_REPAIR);
 	}
@@ -463,6 +470,8 @@ void Tower::upgrade()
 		fireRadius = ufireradius[currentUpdate];
 		costs += ucosts[currentUpdate];
 		map->money -= ucosts[currentUpdate];
+		map->stats.goldSpent += ucosts[currentUpdate];
+		map->stats.upgrades++;
 		currentUpdate++;
 		sfx_play(SFX_UPGRADE);
 	}
@@ -474,6 +483,7 @@ void Tower::enemyDamage(int dmg)
 	if (health < 0 && !destroyed)
 	{
 		destroyed = true;
+		map->stats.towersLost++;
 		destroyCount = millis();
 		sfx_play(SFX_CRUMBLE);
 	}
@@ -504,6 +514,7 @@ void Tower::shoot(float x, float y)
 	enemyPosition[1] = y;
 	shootingCount = millis();
 	shooting = true;
+	map->stats.shots++;
 	enemyLastHit = millis();
 	sfx_play(freeze > 0 ? SFX_FREEZE : splash ? SFX_CATAPULT : SFX_ARROW);
 }
@@ -808,6 +819,8 @@ void Map::addTower(int type, int tx, int ty)
 		if (!gameStarted)
 			startGame();
 		money -= t.costs;
+		stats.goldSpent += t.costs;
+		if (type < 8) stats.built[type]++;
 		towers.push_back(new Tower(t, tx, ty, this));
 		sfx_play(SFX_BUILD);
 	}
@@ -818,6 +831,8 @@ void Map::addTower(int type, int tx, int ty)
 void Map::sellTower(Tower *t)
 {
 	money += (int)(t->costs * 0.8);
+	stats.goldSold += (int)(t->costs * 0.8);
+	stats.sold++;
 	removeTower(t);
 	sfx_play(SFX_SELL);
 }
@@ -974,6 +989,8 @@ void Map::drawHud()
 	char b[32];
 	snprintf(b, sizeof b, "%d", money);
 	draw_text(b, 26, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
+	snprintf(b, sizeof b, "SCORE %d", runningScore());
+	draw_text(b, 8, 40, 11, 0xFFFFFF, ALIGN_LEFT, 2, 255, 0x000000);
 	draw_image(lifeImg, 70, 11);
 	snprintf(b, sizeof b, "%d", lifes);
 	draw_text(b, 88, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);

@@ -21,6 +21,14 @@ struct Sheet {
 
 class Map;
 
+/* what happened in a match, for the sheet shown at the end */
+struct Stats {
+	int goldEarned = 0, goldSpent = 0, goldSold = 0;
+	int built[8] = { 0 }, upgrades = 0, repairs = 0, sold = 0, towersLost = 0;
+	int enemiesDefeated = 0, enemiesLeaked = 0, shots = 0;
+	int playMs = 0;
+};
+
 class CharSets {
 public:
 	explicit CharSets(const std::string &path) : mapPath(path) {}
@@ -179,6 +187,10 @@ public:
 	std::vector<std::pair<int, int> > way;
 	bool gameStarted = false, defeated = false, pause = false, showBuildAreas = false, quitDialog = false;
 	int action = 0, actionTimer = 0;
+	int killPoints = 0, wavesCleared = 0;   /* for the score */
+	Stats stats;
+	float scoreMult() const { return difficulty == 1 ? 1.0f : difficulty == 2 ? 1.5f : 2.0f; }
+	int runningScore() const { return (int)((killPoints + wavesCleared * 100) * scoreMult()); }
 	bool ok = false;
 
 	/* game flow */

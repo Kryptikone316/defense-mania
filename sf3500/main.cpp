@@ -10,11 +10,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <map>
+#include <vector>
 
 static const float PI_F = 3.14159265f;
 static const uint32_t GOLD = 0xFFF8C8;
 
-enum Screen { S_MAIN, S_PLAY, S_OPTIONS, S_CREDITS, S_LOADING, S_GAME, S_AFTER, S_QUIT };
+enum Screen { S_MAIN, S_PLAY, S_OPTIONS, S_CREDITS, S_SCORES, S_LOADING, S_GAME, S_AFTER, S_QUIT };
 
 /* ------------------------------------------------------------------ pad */
 static unsigned padNow, padPrev;
@@ -22,7 +24,7 @@ static inline bool held(int jk) { return (padNow >> jk) & 1; }
 static inline bool pressed(int jk) { return held(jk) && !((padPrev >> jk) & 1); }
 
 /* ------------------------------------------------------------------ menu pieces */
-struct MapInfo { std::string name, url, size; Image logo; };
+struct MapInfo { std::string name, url, size; Image logo; int perfectBase = 0; };   /* perfectBase: the best possible score at difficulty x1 */
 static std::vector<MapInfo> maps;
 static Image logo;
 static int difficulty = 2;       /* 1 easy, 2 normal, 3 hard */
@@ -90,6 +92,107 @@ static std::string music_folder_for(const std::string &url, const std::string &n
 	return "Conquest";
 }
 
+
+/* ------------------------------------------------------------------ high scores */
+/* One player profile: each map keeps its best scores over all difficulties, with the difficulty and the wave reached. */
+struct ScoreEntry { int score = 0, difficulty = 2, waves = 0, total = 0; bool won = false; };
+static std::map<std::string, std::vector<ScoreEntry> > scoreTables;   /* by map id, best first */
+static const int SCORE_ROWS = 8;
+
+static std::string map_id(const std::string &url) { std::string id = url; if (id.size() > 4 && id.compare(id.size() - 4, 4, ".xml") == 0) id.resize(id.size() - 4); return id; }
+static std::string scores_path() { const char *h = getenv("HOME"); return std::string(h ? h : ".") + "/.defensemania_scores"; }
+
+static void load_scores()
+{
+	FILE *f = fopen(scores_path().c_str(), "r");
+	if (!f)
+		return;
+	char line[200], id[64];
+	int diff, score, waves, total, won;
+	while (fgets(line, sizeof line, f))
+		if (sscanf(line, "%63s %d %d %d %d %d", id, &diff, &score, &waves, &total, &won) == 6)
+		{
+			ScoreEntry e;
+			e.score = score; e.difficulty = diff; e.waves = waves; e.total = total; e.won = won != 0;
+			scoreTables[id].push_back(e);
+		}
+	fclose(f);
+}
+
+static void save_scores()
+{
+	FILE *f = fopen(scores_path().c_str(), "w");
+	if (!f)
+		return;
+	for (std::map<std::string, std::vector<ScoreEntry> >::const_iterator it = scoreTables.begin(); it != scoreTables.end(); ++it)
+		for (size_t i = 0; i < it->second.size(); i++)
+		{
+			const ScoreEntry &e = it->second[i];
+			fprintf(f, "%s %d %d %d %d %d\n", it->first.c_str(), e.difficulty, e.score, e.waves, e.total, e.won);
+		}
+	fclose(f);
+}
+
+/* puts a score in its map's table; returns its place (0-based), or -1 when it did not make the list */
+static int add_score(const std::string &mapId, const ScoreEntry &e)
+{
+	if (e.score <= 0)
+		return -1;
+	std::vector<ScoreEntry> &t = scoreTables[mapId];
+	int r = 0;
+	while (r < (int)t.size() && t[r].score >= e.score)
+		r++;
+	if (r >= SCORE_ROWS)
+		return -1;
+	t.insert(t.begin() + r, e);
+	if ((int)t.size() > SCORE_ROWS)
+		t.resize(SCORE_ROWS);
+	save_scores();
+	return r;
+}
+
+/* what the finished match was worth */
+struct Result {
+	std::string mapId, mapName;
+	int difficulty = 2, kills = 0, wavesCleared = 0, totalWaves = 0, lives = 0, money = 0, score = 0;
+	bool won = false;
+	float mult = 1;
+	int winBonus = 0, lifeBonus = 0, waveBonus = 0, perfect = 0, perfectBase = 0;
+	int rank = -1;               /* place in the table, -1 when it did not make it */
+	Stats stats;
+	std::vector<std::string> towerNames;
+};
+
+static float diff_mult(int d) { return d == 1 ? 1.0f : d == 2 ? 1.5f : 2.0f; }
+
+static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
+{
+	const std::string &name = info.name;
+	r.mapName = name;
+	r.mapId = m->id;
+	r.difficulty = m->difficulty;
+	r.kills = m->killPoints;
+	r.wavesCleared = m->wavesCleared;
+	r.totalWaves = (int)m->waves->waves.size();
+	r.lives = m->lifes;
+	r.money = m->money;
+	r.stats = m->stats;
+	r.towerNames.clear();
+	for (size_t i = 0; i < m->towerTypes.size(); i++)
+		r.towerNames.push_back(m->towerTypes[i].name);
+	r.won = won;
+	r.mult = m->scoreMult();
+	r.waveBonus = r.wavesCleared * 100;
+	r.winBonus = won ? 1000 : 0;
+	r.lifeBonus = won ? r.lives * 100 : 0;
+	r.perfectBase = info.perfectBase;
+	r.perfect = (int)(info.perfectBase * r.mult);
+	r.score = (int)((r.kills + r.waveBonus + r.winBonus + r.lifeBonus) * r.mult);
+	ScoreEntry e;
+	e.score = r.score; e.difficulty = r.difficulty; e.waves = r.wavesCleared; e.total = r.totalWaves; e.won = won;
+	r.rank = add_score(r.mapId, e);
+}
+
 static void load_maps()
 {
 	XNode root;
@@ -103,30 +206,44 @@ static void load_maps()
 		m.url = ms[i]->str("url");
 		m.size = ms[i]->str("size");
 		load_image("data/maps/" + m.url + "/" + ms[i]->str("img"), m.logo);
+		/* every enemy beaten, every wave cleared, the match won and no life lost */
+		XNode waves, tree;
+		if (xml_load("data/maps/" + m.url + "/waves.xml", waves) && xml_load("data/maps/" + m.url + "/maptree.xml", tree))
+		{
+			std::vector<const XNode *> ws = waves.list("waves/wave");
+			int kills = 0;
+			for (size_t w = 0; w < ws.size(); w++)
+				for (size_t k = 0; k < ws[w]->kids.size(); k++)
+					if (ws[w]->kids[k].name == "enemy")
+						kills += ws[w]->kids[k].num("count") * ws[w]->kids[k].num("money") * 5;
+			const XNode *game = tree.child("game");
+			m.perfectBase = kills + (int)ws.size() * 100 + 1000 + (game ? game->num("lifes") * 100 : 0);
+		}
 		maps.push_back(m);
 	}
 }
 
 static Screen screen_main(int &sel)
 {
-	static const char *labels[4] = { "PLAY", "CREDITS", "OPTIONS", "EXIT" };
+	static const char *labels[5] = { "PLAY", "SCORES", "CREDITS", "OPTIONS", "EXIT" };
 	gfx_clear(0, 0, 0);
 	if (logo.valid())
 	{
 		int w = logo.w * 62 / 100, h = logo.h * 62 / 100;
 		draw_image_scaled(logo, (SW - w) / 2, 8, w, h);
 	}
-	int bw = 130, gap = (SW - bw * 4) / 5;
-	for (int i = 0; i < 4; i++)
-		draw_button(labels[i], gap + i * (bw + gap), SH - 62, bw, 26, i == sel, 22);
+	int bw = 112, gap = (SW - bw * 5) / 6;
+	for (int i = 0; i < 5; i++)
+		draw_button(labels[i], gap + i * (bw + gap), SH - 62, bw, 26, i == sel, 20);
 	draw_hint("D-Pad: choose    A: select");
-	if (pressed(JK_LEFT)) sel = (sel + 3) % 4;
-	if (pressed(JK_RIGHT)) sel = (sel + 1) % 4;
+	if (pressed(JK_LEFT)) sel = (sel + 4) % 5;
+	if (pressed(JK_RIGHT)) sel = (sel + 1) % 5;
 	if (pressed(JK_A))
 	{
 		if (sel == 0) return S_PLAY;
-		if (sel == 1) return S_CREDITS;
-		if (sel == 2) return S_OPTIONS;
+		if (sel == 1) return S_SCORES;
+		if (sel == 2) return S_CREDITS;
+		if (sel == 3) return S_OPTIONS;
 		return S_QUIT;
 	}
 	return S_MAIN;
@@ -225,19 +342,186 @@ static Screen screen_credits()
 	return S_CREDITS;
 }
 
-static Screen screen_after(bool won, int &sel)
+static void draw_table(const std::string &mapId, int x, int y, int highlight, int perfectBase)
+{
+	static const char *dif[3] = { "EASY", "NORMAL", "HARD" };
+	const std::vector<ScoreEntry> &t = scoreTables[mapId];
+	draw_text("DIFFICULTY", x + 40, y, 12, 0x909090, ALIGN_LEFT, 1);
+	draw_text("WAVE", x + 215, y, 12, 0x909090, ALIGN_RIGHT, 1);
+	draw_text("SCORE", x + 310, y, 12, 0x909090, ALIGN_RIGHT, 1);
+	fill_rect(x, y + 17, 320, 1, 0xF8DDC2);
+	for (int i = 0; i < SCORE_ROWS; i++)
+	{
+		int ry = y + 22 + i * 26;
+		bool hl = i == highlight;
+		uint32_t col = hl ? 0xFFD400 : i < (int)t.size() ? 0xFFFFFF : 0x606060;
+		if (hl)
+			fill_rect(x - 4, ry - 3, 328, 24, 0xFFD400, 45);
+		char b[24];
+		snprintf(b, sizeof b, "%d.", i + 1);
+		draw_text(b, x + 4, ry, 16, col, ALIGN_LEFT, 0);
+		if (i < (int)t.size())
+		{
+			draw_text(dif[t[i].difficulty - 1], x + 40, ry, 16, col, ALIGN_LEFT, 0);
+			if (t[i].won)
+				snprintf(b, sizeof b, "WON");
+			else
+				snprintf(b, sizeof b, "%d / %d", t[i].waves + 1 > t[i].total ? t[i].total : t[i].waves + 1, t[i].total);
+			draw_text(b, x + 215, ry, 16, col, ALIGN_RIGHT, 0);
+			snprintf(b, sizeof b, "%d", t[i].score);
+			draw_text(b, x + 310, ry, 16, col, ALIGN_RIGHT, 0);
+			if (perfectBase > 0 && t[i].score >= (int)(perfectBase * diff_mult(t[i].difficulty)))
+				draw_text("PERFECT", x + 252, ry + 3, 10, 0xFFD400, ALIGN_RIGHT, 2);
+		}
+		else
+			draw_text("---", x + 40, ry, 16, col, ALIGN_LEFT, 0);
+	}
+}
+
+static int scoresMap = 0;
+
+static Screen screen_scores()
 {
 	gfx_clear(0, 0, 0);
-	draw_text(won ? "WELL DONE!" : "MAYBE NEXT TIME ...", SW / 2, SH / 2 - 50, 36, 0xFFFFFF, ALIGN_CENTER, 0);
+	draw_text("HIGH SCORES", SW / 2, 12, 24, 0xFFFFFF, ALIGN_CENTER, 0);
+	if (maps.empty())
+		return S_MAIN;
+	draw_text(std::string("<  ") + maps[scoresMap].name + "  >", SW / 2, 48, 18, 0x89F9FF, ALIGN_CENTER, 0);
+	char pf[96];
+	int pb = maps[scoresMap].perfectBase;
+	snprintf(pf, sizeof pf, "Perfect score:   Easy %d   Normal %d   Hard %d", (int)(pb * 1.0f), (int)(pb * 1.5f), (int)(pb * 2.0f));
+	draw_text(pf, SW / 2, 72, 12, 0xFFE066, ALIGN_CENTER, 1);
+	draw_table(map_id(maps[scoresMap].url), (SW - 320) / 2, 98, -1, pb);
+	draw_hint("Left/Right: map    B: back");
+	if ((pressed(JK_LEFT) || pressed(JK_UP)) && scoresMap > 0) scoresMap--;
+	if ((pressed(JK_RIGHT) || pressed(JK_DOWN)) && scoresMap + 1 < (int)maps.size()) scoresMap++;
+	if (pressed(JK_B) || pressed(JK_START)) return S_MAIN;
+	return S_SCORES;
+}
+
+static void draw_stats(const Result &r)
+{
+	const Stats &st = r.stats;
+	char b[64];
+	draw_text(r.won ? "VICTORY!" : "DEFEATED", 24, 10, 30, r.won ? 0xFFE066 : 0xFF7070, ALIGN_LEFT, 0);
+	draw_text("MATCH STATS", SW - 24, 20, 18, 0xFFFFFF, ALIGN_RIGHT, 0);
+	struct Col { int x; const char *head; } cols[3] = { { 24, "GOLD" }, { 232, "TOWERS" }, { 440, "ENEMIES" } };
+	for (int i = 0; i < 3; i++)
+	{
+		draw_text(cols[i].head, cols[i].x, 62, 14, 0x89F9FF, ALIGN_LEFT, 0);
+		fill_rect(cols[i].x, 82, 180, 1, 0xF8DDC2);
+	}
+	int y = 92, dy = 20;
+	auto row = [&](int x, const char *label, const std::string &val) {
+		draw_text(label, x, y, 12, 0xE6E6E6, ALIGN_LEFT, 1);
+		draw_text(val, x + 180, y, 12, 0xFFFFFF, ALIGN_RIGHT, 2);
+	};
+	auto num = [&](int v) { snprintf(b, sizeof b, "%d", v); return std::string(b); };
+	/* gold */
+	int yy = y;
+	row(24, "Earned from enemies", num(st.goldEarned)); y += dy;
+	row(24, "Spent on towers", num(st.goldSpent)); y += dy;
+	row(24, "Gained selling", num(st.goldSold)); y += dy;
+	row(24, "Left over", num(r.money)); y += dy;
+	/* towers */
+	y = yy;
+	int total = 0;
+	for (size_t i = 0; i < r.towerNames.size() && i < 8; i++)
+	{
+		row(232, r.towerNames[i].c_str(), num(st.built[i]));
+		total += st.built[i];
+		y += dy;
+	}
+	row(232, "Upgrades", num(st.upgrades)); y += dy;
+	row(232, "Repairs", num(st.repairs)); y += dy;
+	row(232, "Sold", num(st.sold)); y += dy;
+	row(232, "Lost in battle", num(st.towersLost)); y += dy;
+	/* enemies */
+	y = yy;
+	row(440, "Defeated", num(st.enemiesDefeated)); y += dy;
+	row(440, "Reached the end", num(st.enemiesLeaked)); y += dy;
+	row(440, "Shots fired", num(st.shots)); y += dy;
+	int sec = st.playMs / 1000;
+	snprintf(b, sizeof b, "%d:%02d", sec / 60, sec % 60);
+	row(440, "Time played", b); y += dy;
+	row(440, "Lives left", num(r.lives)); y += dy;
+	snprintf(b, sizeof b, total == 1 ? "%d tower built" : "%d towers built", total);
+	draw_text(b, SW / 2, SH - 100, 12, 0xB0B0B0, ALIGN_CENTER, 1);
+}
+
+static int afterView = 0;
+
+static Screen screen_after(Result &r, int &sel)
+{
+	gfx_clear(0, 0, 0);
+	if (pressed(JK_UP) || pressed(JK_DOWN) || pressed(JK_X) || pressed(JK_Y)) afterView ^= 1;
+	if (afterView == 1)
+	{
+		draw_stats(r);
+		static const char *labels2[3] = { "PLAY AGAIN", "BACK TO MENU", "EXIT GAME" };
+		int bw2 = 160, gap2 = (SW - bw2 * 3) / 4;
+		for (int i = 0; i < 3; i++)
+			draw_button(labels2[i], gap2 + i * (bw2 + gap2), SH - 62, bw2, 26, i == sel, 18);
+		draw_hint("Up/Down: score    Left/Right: choose    A: select");
+		if (pressed(JK_LEFT)) sel = (sel + 2) % 3;
+		if (pressed(JK_RIGHT)) sel = (sel + 1) % 3;
+		if (pressed(JK_A))
+		{
+			afterView = 0;
+			if (sel == 0) { mapPicked = lastMap; difficulty = lastDifficulty; return S_LOADING; }
+			if (sel == 1) return S_PLAY;
+			return S_QUIT;
+		}
+		return S_AFTER;
+	}
+	draw_text(r.won ? "VICTORY!" : "DEFEATED", 24, 10, 30, r.won ? 0xFFE066 : 0xFF7070, ALIGN_LEFT, 0);
+	draw_text(r.mapName + (r.difficulty == 1 ? "  -  Easy" : r.difficulty == 2 ? "  -  Normal" : "  -  Hard"), 24, 48, 12, 0xB0B0B0, ALIGN_LEFT, 1);
+	char b[64];
+	int y = 72;
+	struct Line { const char *label; int value; } lines[4] = {
+		{ "Enemies defeated", r.kills }, { "Waves cleared", r.waveBonus }, { "Victory bonus", r.winBonus },
+		{ "Lives left", r.lifeBonus } };
+	for (int i = 0; i < 4; i++)
+	{
+		bool skip = !r.won && i >= 2;
+		draw_text(lines[i].label, 24, y, 13, skip ? 0x505050 : 0xE6E6E6, ALIGN_LEFT, 1);
+		snprintf(b, sizeof b, "%d", lines[i].value);
+		draw_text(b, 220, y, 13, skip ? 0x505050 : 0xE6E6E6, ALIGN_RIGHT, 1);
+		y += 19;
+	}
+	snprintf(b, sizeof b, "x %.1f", r.mult);
+	draw_text("Difficulty", 24, y, 13, 0xE6E6E6, ALIGN_LEFT, 1);
+	draw_text(b, 220, y, 13, 0xE6E6E6, ALIGN_RIGHT, 1);
+	y += 24;
+	fill_rect(24, y - 4, 196, 1, 0xF8DDC2);
+	draw_text("TOTAL", 24, y + 2, 18, 0xFFE066, ALIGN_LEFT, 2);
+	snprintf(b, sizeof b, "%d", r.score);
+	draw_text(b, 220, y + 2, 18, 0xFFE066, ALIGN_RIGHT, 2);
+	if (r.perfect > 0)
+	{
+		if (r.score >= r.perfect)
+			draw_text("PERFECT SCORE!", 24, y + 34, 18, 0xFFD400, ALIGN_LEFT, 0);
+		else
+		{
+			snprintf(b, sizeof b, "Perfect score: %d  (%d%%)", r.perfect, r.score * 100 / r.perfect);
+			draw_text(b, 24, y + 34, 13, 0xFFE066, ALIGN_LEFT, 1);
+			if (r.rank >= 0)
+				draw_text(r.rank == 0 ? "NEW BEST SCORE!" : "NEW HIGH SCORE!", 24, y + 54, 16, 0xFFD400, ALIGN_LEFT, 0);
+		}
+	}
+
+	draw_table(r.mapId, 300, 14, r.rank, r.perfectBase);
+
 	static const char *labels[3] = { "PLAY AGAIN", "BACK TO MENU", "EXIT GAME" };
 	int bw = 160, gap = (SW - bw * 3) / 4;
 	for (int i = 0; i < 3; i++)
 		draw_button(labels[i], gap + i * (bw + gap), SH - 62, bw, 26, i == sel, 18);
-	draw_hint("Left/Right: choose    A: select");
+	draw_hint("Up/Down: match stats    Left/Right: choose    A: select");
 	if (pressed(JK_LEFT)) sel = (sel + 2) % 3;
 	if (pressed(JK_RIGHT)) sel = (sel + 1) % 3;
 	if (pressed(JK_A))
 	{
+		afterView = 0;
 		if (sel == 0) { mapPicked = lastMap; difficulty = lastDifficulty; return S_LOADING; }
 		if (sel == 1) return S_PLAY;
 		return S_QUIT;
@@ -385,6 +669,8 @@ static void open_tower_menu(Play &p, int id)
 static void play_input(Play &p, float dtMs)
 {
 	Map *m = p.map;
+	if (m->gameStarted && !m->pause && !m->defeated && !m->quitDialog)
+		m->stats.playMs += (int)dtMs;
 	if (m->quitDialog)
 	{
 		if (pressed(JK_LEFT) || pressed(JK_RIGHT)) p.quitSel = 1 - p.quitSel;
@@ -544,11 +830,12 @@ int main()
 	optHQ = cfg_num("hq_graphics", 0) != 0;
 	audio_init();
 	load_settings();
+	load_scores();
 	music_play_folder("Conquest");
 
 	Screen screen = S_MAIN;
 	int mainSel = 0, optSel = 0, afterSel = 0;
-	bool afterWon = false;
+	Result result;
 	Play play;
 	uint32_t lastFrame = millis();
 	int fpsFrames = 0, fps = 0;
@@ -578,7 +865,8 @@ int main()
 		case S_PLAY: next = screen_play(); break;
 		case S_OPTIONS: next = screen_options(optSel); break;
 		case S_CREDITS: next = screen_credits(); break;
-		case S_AFTER: next = screen_after(afterWon, afterSel); break;
+		case S_AFTER: next = screen_after(result, afterSel); break;
+		case S_SCORES: next = screen_scores(); break;
 		case S_LOADING:
 			gfx_clear(0, 0, 0);
 			draw_text("LOADING ...", SW / 2, SH / 2 - 14, 24, 0xFFFFFF, ALIGN_CENTER, 0);
@@ -609,16 +897,25 @@ int main()
 			}
 			break;
 		case S_GAME:
+			if (getenv("DM_FAKE_RESULT") && (int)millis() - play.started > (getenv("DM_FAKE_DELAY") ? atoi(getenv("DM_FAKE_DELAY")) : 1500) && !play.map->finished)
+			{   /* test hook: end the match at once with some score */
+				play.map->killPoints = 640;
+				play.map->wavesCleared = atoi(getenv("DM_FAKE_RESULT"));
+				play.map->finished = true;
+				play.map->finishedWon = false;
+			}
 			play_input(play, dt);
 			play_draw(play);
 			if (play.map->finished)
 			{
-				afterWon = play.map->finishedWon;
 				afterSel = 0;
 				if (play.map->quitDialog && !play.map->finishedWon)
 					next = S_MAIN;   /* quit from the pause dialog goes straight back */
 				else
+				{
+					make_result(result, play.map, play.map->finishedWon, maps[lastMap]);
 					next = S_AFTER;
+				}
 				delete play.map;
 				play.map = NULL;
 				grade_set_map("");
