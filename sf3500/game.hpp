@@ -72,7 +72,8 @@ private:
 	Sheet *sheet;
 	std::string sheetFile;
 	std::vector<TowerHit> towerHits;
-	int healthBarOffset = -1, animationCount = 0, moveCount = 0, moveState = 1, moveStateDirection = 1, moveVector[2];
+	int healthBarOffset = -1, animationCount = 0, moveCount = 0, moveState = 1, moveStateDirection = 1;
+	float moveVector[2], target[2];   /* a unit vector towards the next way point */
 	float animationSpeed;
 	int moveSpeed, money, damage, maxHealth, health;
 	int start[2], end[2];

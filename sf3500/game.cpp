@@ -99,51 +99,55 @@ void Enemy::setWaypoints(const int *s, const int *e, const std::vector<std::pair
 	moveCount = millis();
 }
 
+/* The way points may lie in any direction (The Swamp uses diagonals): the enemy walks straight at the next one. After
+ * the last way point it carries on towards the end point and one tile beyond it, as in the original game. */
 void Enemy::calculateMoveVector()
 {
 	wpPosition++;
-	moveVector[0] = moveVector[1] = 0;
-	float nx, ny;
-	if (wpPosition >= (int)way.size()) { nx = (float)end[0]; ny = (float)end[1]; }
-	else { nx = (float)way[wpPosition].first; ny = (float)way[wpPosition].second; }
-	if (nx - position[0] > 0 + freezeFactorTemp) { moveVector[0] = 1; moveDirection = 2; }
-	else if (nx - position[0] < 0 - freezeFactorTemp) { moveVector[0] = -1; moveDirection = 1; }
-	if (ny - position[1] > 0 + freezeFactorTemp) { moveVector[1] = 1; moveDirection = 0; }
-	else if (ny - position[1] < 0 - freezeFactorTemp) { moveVector[1] = -1; moveDirection = 3; }
+	if (wpPosition < (int)way.size())
+	{
+		target[0] = (float)way[wpPosition].first;
+		target[1] = (float)way[wpPosition].second;
+	}
+	else
+	{
+		float fromX = way.empty() ? (float)start[0] : (float)way.back().first, fromY = way.empty() ? (float)start[1] : (float)way.back().second;
+		float dx = end[0] - fromX, dy = end[1] - fromY, len = sqrtf(dx * dx + dy * dy);
+		if (len < 0.001f) { dx = 1; dy = 0; len = 1; }
+		target[0] = end[0] + dx / len * tileSize;
+		target[1] = end[1] + dy / len * tileSize;
+		reachingEndpoint = true;
+	}
+	float dx = target[0] - position[0], dy = target[1] - position[1], len = sqrtf(dx * dx + dy * dy);
+	if (len < 0.5f)
+	{
+		moveVector[0] = moveVector[1] = 0;
+		return;
+	}
+	moveVector[0] = dx / len;
+	moveVector[1] = dy / len;
+	if (fabsf(dx) >= fabsf(dy)) moveDirection = dx > 0 ? 2 : 1;
+	else moveDirection = dy > 0 ? 0 : 3;
 }
 
 void Enemy::checkWP()
 {
-	int nx, ny;
-	if (wpPosition >= (int)way.size())
+	float dx = target[0] - position[0], dy = target[1] - position[1];
+	if (dx * moveVector[0] + dy * moveVector[1] > 0)
+		return;   /* still on the way */
+	position[0] = target[0];
+	position[1] = target[1];
+	if (reachingEndpoint)
 	{
-		nx = end[0] + tileSize;
-		ny = end[1];
-		reachingEndpoint = true;
+		map->lifes--;
+		map->stats.enemiesLeaked++;
+		sfx_play(SFX_LIFELOST);
+		if (map->lifes == 0)
+			map->loseGame();
+		enemyAlive = false;
+		return;
 	}
-	else
-	{
-		nx = way[wpPosition].first;
-		ny = way[wpPosition].second;
-	}
-	bool arrived = false;
-	if (moveVector[0] < 0) { if (position[0] <= nx) { position[0] = (float)nx; arrived = true; } }
-	else if (moveVector[0] > 0) { if (position[0] >= nx) { position[0] = (float)nx; arrived = true; } }
-	else if (moveVector[1] < 0) { if (position[1] <= ny) { position[1] = (float)ny; arrived = true; } }
-	else if (moveVector[1] > 0) { if (position[1] >= ny) { position[1] = (float)ny; arrived = true; } }
-	if (arrived)
-	{
-		if (reachingEndpoint)
-		{
-			map->lifes--;
-			map->stats.enemiesLeaked++;
-			sfx_play(SFX_LIFELOST);
-			if (map->lifes == 0)
-				map->loseGame();
-			enemyAlive = false;
-		}
-		calculateMoveVector();
-	}
+	calculateMoveVector();
 }
 
 void Enemy::display()

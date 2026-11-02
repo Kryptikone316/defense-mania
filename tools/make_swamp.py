@@ -15,57 +15,75 @@ rng = np.random.default_rng(1203)
 random.seed(1203)
 
 # ------------------------------------------------------------------ the layout
-# path vertices in tiles (col, row): enters at the left edge, crosses itself once in the middle (a loop around the
-# lower-left island, then back over the central column) and leaves on the right edge.
-PATH = [(0, 3), (9, 3), (9, 11), (3, 11), (3, 7), (15, 7), (15, 13), (19, 13)]
+# The way points, in pixels. Enemies walk straight from one to the next, so the track is a crooked, kinked trail with
+# one curl in the middle that doubles back on itself: a place to wander and get lost in. It enters on the left edge and
+# leaves on the right one.
+PATH_PX = [(24, 120), (130, 96), (215, 170), (310, 140), (395, 205), (365, 300), (270, 345), (175, 315), (110, 395),
+           (150, 495), (250, 535), (355, 505), (430, 420), (525, 455), (560, 555), (480, 640), (590, 668), (700, 610),
+           (715, 505), (640, 405), (720, 320), (640, 235), (545, 255), (520, 160), (610, 95), (720, 120), (800, 200),
+           (860, 300), (830, 410), (880, 520), (936, 600)]
 
-def path_tiles():
-    s = set()
-    for (c0, r0), (c1, r1) in zip(PATH, PATH[1:]):
-        for c in range(min(c0, c1), max(c0, c1) + 1):
-            for r in range(min(r0, r1), max(r0, r1) + 1):
-                s.add((c, r))
-    return s
+def seg_point_dist(px_, py_, a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    l2 = dx * dx + dy * dy
+    t = 0 if l2 == 0 else max(0, min(1, ((px_ - a[0]) * dx + (py_ - a[1]) * dy) / l2))
+    return math.hypot(px_ - (a[0] + t * dx), py_ - (a[1] + t * dy))
 
-PT = path_tiles()
+def path_dist(x, y):
+    return min(seg_point_dist(x, y, a, b) for a, b in zip(PATH_PX, PATH_PX[1:]))
 
 def centre(c, r): return (c * T + T // 2, r * T + T // 2)
 
-def near_path(c, r, d):
-    cx, cy = centre(c, r)
-    return min(math.hypot(cx - centre(p[0], p[1])[0], cy - centre(p[0], p[1])[1]) for p in PT) <= d * T
+# tiles the trail covers: nothing can be built there
+PT = {(c, r) for c in range(W) for r in range(H) if path_dist(*centre(c, r)) <= 41}
 
-def choose_spots(target=66):
-    """tower spots: scarce, but every bit of path stays within reach (arrow range is about 2 tiles) of at least 3"""
-    cand = [(c, r) for c in range(W) for r in range(H) if (c, r) not in PT and near_path(c, r, 2.05)]
-    cover = {p: 0 for p in PT}
-    def reach(t):
-        cx, cy = centre(*t)
-        return [p for p in PT if math.hypot(cx - centre(*p)[0], cy - centre(*p)[1]) <= 2.05 * T]
+# points along the trail, for checking that every stretch of it can be reached by some towers
+SAMPLES = []
+for a, b in zip(PATH_PX, PATH_PX[1:]):
+    n = int(math.hypot(b[0] - a[0], b[1] - a[1]) // 16)
+    for i in range(n):
+        SAMPLES.append((a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n))
+REACH = 1.9 * T     # an arrow tower's real reach
+
+def choose_spots(target=72):
+    """tower spots: scarce, scattered along both sides of the trail and clustered at the kinks, and every stretch of
+    the trail (bar its ends) stays within reach of at least two of them"""
+    rng_sp = random.Random(5)
+    cand = [(c, r) for c in range(W) for r in range(H) if (c, r) not in PT and 42 <= path_dist(*centre(c, r)) <= 110]
+    reach = {t: [i for i, p in enumerate(SAMPLES) if math.hypot(p[0] - centre(*t)[0], p[1] - centre(*t)[1]) <= REACH] for t in cand}
+    cover = [0] * len(SAMPLES)
+    inner = [i for i, p in enumerate(SAMPLES) if 100 < p[0] < PW - 100]
     spots = []
-    inner = [p for p in PT if 2 < p[0] < W - 3]
-    while len(spots) < target and (len(spots) < 40 or min(cover[p] for p in inner) < 3):
+    side_by_side = False
+    while len(spots) < target + 6 and (len(spots) < 52 or min(cover[i] for i in inner) < 2):
         best, bs = None, 0
         for t in cand:
-            if t in spots or any(abs(t[0] - s[0]) + abs(t[1] - s[1]) == 1 for s in spots):
+            if t in spots:
                 continue
-            sc = sum(1.0 / (1 + cover[p]) ** 1.5 for p in reach(t))
+            if not side_by_side and any(abs(t[0] - s[0]) + abs(t[1] - s[1]) == 1 for s in spots):   # no two side by side, so no solid lines
+                continue
+            sc = sum(1.0 / (1 + cover[i]) ** 1.5 for i in reach[t]) * (0.75 + 0.5 * rng_sp.random())
             if sc > bs:
                 best, bs = t, sc
         if not best:
+            if side_by_side:
+                break
+            side_by_side = True   # only to patch a weak stretch
+            continue
+        if side_by_side and min(cover[i] for i in inner) >= 2:
             break
         spots.append(best)
-        for p in reach(best):
-            cover[p] += 1
-    return spots, cover
+        for i in reach[best]:
+            cover[i] += 1
+    return spots, cover, inner
 
-SPOTS, COVER = choose_spots()
+SPOTS, COVER, INNER = choose_spots()
 SPOT_SET = set(SPOTS)
 
 # ------------------------------------------------------------------ colours and textures
 def lerp(a, b, t): return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
 
-GRASS_LIGHT, GRASS_DARK = (118, 116, 66), (74, 82, 48)
+GRASS_LIGHT, GRASS_DARK = (106, 108, 62), (64, 74, 44)
 MARSH = (62, 74, 44)
 MUD_LIGHT, MUD_DARK = (166, 140, 92), (112, 92, 60)
 WATER_DEEP, WATER_MID, WATER_LIGHT = (52, 60, 46), (82, 90, 68), (146, 150, 112)
@@ -122,14 +140,31 @@ mix = np.clip(0.35 + 0.9 * (N1 - 0.5) + 0.5 * (N2 - 0.5), 0, 1)
 img = colour_field(GRASS_LIGHT, GRASS_DARK, mix, 0.16)
 
 # darker marsh and reed beds
-marsh_m = np.clip((N2 * 0.6 + N3 * 0.4 - 0.52) * 7, 0, 1) * np.clip((N1 - 0.35) * 4, 0, 1)
+marsh_m = np.clip((N2 * 0.6 + N3 * 0.4 - 0.46) * 6, 0, 1) * np.clip((N1 - 0.25) * 4, 0, 1)
 img = paste_colour(img, colour_field(MARSH, (48, 58, 36), N3, 0.2), marsh_m * 0.75)
 
 # ------------------------------------------------------------------ 2. water: pools away from the path
-POOLS = [  # (centre tile x, y as floats, radius in tiles x, y)
-    (6.3, 5.4, 1.9, 1.4), (13.0, 1.0, 2.6, 1.0), (17.4, 4.4, 1.5, 2.3), (6.0, 13.4, 2.6, 1.1),
-    (12.4, 9.6, 1.3, 1.5), (1.0, 8.6, 1.0, 1.9), (17.6, 10.2, 1.6, 1.2), (7.0, 0.9, 1.6, 0.8),
-    (11.8, 13.4, 1.3, 0.8), (14.2, 5.0, 1.2, 1.0), (1.4, 0.8, 1.2, 0.8), (18.4, 0.6, 1.2, 0.9)]
+def open_ground():
+    pts = []
+    for y in range(24, PH, 24):
+        for x in range(24, PW, 24):
+            d = path_dist(x, y)
+            if d > 76:
+                pts.append((d, x, y))
+    pts.sort(reverse=True)
+    chosen = []
+    for d, x, y in pts:
+        if all(math.hypot(x - cx, y - cy) > 118 for _, cx, cy, _ in chosen):
+            chosen.append((d, x, y, d))
+        if len(chosen) >= 13:
+            break
+    return chosen
+POOLS = []   # (centre tile x, y as floats, radius in tiles x, y)
+_rp = random.Random(9)
+for d, x, y, _ in open_ground():
+    rx = max(0.6, (d - 62) / T * (1.0 + 0.5 * _rp.random()))
+    ry = max(0.5, (d - 62) / T * (0.7 + 0.4 * _rp.random()))
+    POOLS.append((x / T, y / T, rx, ry))
 water = np.zeros((PH, PW), np.float32)
 yy, xx = np.mgrid[0:PH, 0:PW].astype(np.float32)
 for cx, cy, rx, ry in POOLS:
@@ -140,6 +175,10 @@ for cx, cy, rx, ry in POOLS:
 keep = np.zeros((PH, PW), np.float32)
 for (c, r) in list(PT) + SPOTS:
     keep[r * T:(r + 1) * T, c * T:(c + 1) * T] = 1
+_pi = Image.new('L', (PW, PH), 0)
+_pd = ImageDraw.Draw(_pi)
+_pd.line(PATH_PX, fill=255, width=92, joint='curve')
+keep = np.maximum(keep, np.asarray(_pi, np.float32) / 255.0)
 keep = soft_mask(keep, 5)
 water = np.clip(water - keep * 1.2, 0, 1)
 shore = soft_mask(np.clip(water * 3, 0, 1), 5)
@@ -154,7 +193,7 @@ img = paste_colour(img, wcol, soft_mask(water, 1.2))
 
 # ------------------------------------------------------------------ 3. the mud track
 def path_draw(d):
-    pts = [(c * T + T // 2, r * T + T // 2) for c, r in PATH]
+    pts = list(PATH_PX)
     pts[0] = (-30, pts[0][1])
     pts[-1] = (PW + 30, pts[-1][1])
     d.line(pts, fill=255, width=40, joint='curve')
@@ -247,16 +286,16 @@ occupied = set(PT) | SPOT_SET
 free = [(c, r) for c in range(W) for r in range(H) if (c, r) not in occupied]
 wat_t = [(c, r) for (c, r) in free if water[r * T + T // 2, c * T + T // 2] > 0.5]
 land_t = [(c, r) for (c, r) in free if (c, r) not in wat_t]
-pathdist = {t: min(abs(t[0] - p[0]) + abs(t[1] - p[1]) for p in PT) for t in land_t}
+pathdist = {t: path_dist(*centre(*t)) for t in land_t}
 rr = random.Random(77)
 for (c, r) in land_t:
     x, y = centre(c, r)
     x += rr.randint(-8, 8); y += rr.randint(-6, 8)
     far = pathdist[(c, r)]
     roll = rr.random()
-    if far >= 2 and roll < 0.62:
-        tree(x, y + 14, 0.9 + rr.random() * 0.4)
-    elif far >= 1 and roll < 0.8:
+    if far >= 76 and roll < 0.7:
+        tree(x, y + 14, 0.9 + rr.random() * 0.45)
+    elif far >= 48 and roll < 0.86:
         reeds(x, y + 10, 5 + rr.randint(0, 5))
     elif roll < 0.9:
         rock(x, y + 6, 0.7 + rr.random() * 0.5)
@@ -270,9 +309,9 @@ for (c, r) in SPOTS:
     if rr.random() < 0.5: reeds(x + rr.choice([-15, 15]), y + 18, 3)
     if rr.random() < 0.3: rock(x + rr.choice([-14, 14]), y + 16, 0.45)
 # along the path: the odd reed clump on the verge
-for (c, r) in sorted(PT):
-    x, y = centre(c, r)
-    if rr.random() < 0.22: reeds(x + rr.choice([-21, 21]), y + rr.choice([-12, 18]), 4)
+for i, (sx, sy) in enumerate(SAMPLES):
+    if i % 6 == 0 and rr.random() < 0.5:
+        reeds(sx + rr.choice([-27, 27]), sy + rr.choice([-8, 14]), 4)
 
 layer = Image.new('RGBA', base.size, (0, 0, 0, 0))
 for _, fn in sorted(sprites, key=lambda s: s[0]):
@@ -315,8 +354,7 @@ with open(os.path.join(OUT, 'maptree.xml'), 'w') as f:
     f.write("    </levels>\n    <mapsize w='%d' h='%d'></mapsize>\n    <tilesize s='%d'></tilesize>\n    <game lifes=\"10\" startmoney=\"220\"></game>\n  </maptree>\n" % (W, H, T))
 with open(os.path.join(OUT, 'waypoints.xml'), 'w') as f:
     f.write("<?xml version='1.0'?>\n  <pathfinding>\n    <waypoints>\n")
-    pts = [centre(c, r) for c, r in PATH]
-    for i, (x, y) in enumerate(pts):
+    for i, (x, y) in enumerate(PATH_PX):
         f.write("      <waypoint id='%d'>%d,%d,2</waypoint>\n" % (i, x, y))
     f.write("    </waypoints>\n  </pathfinding>\n")
 
@@ -358,8 +396,10 @@ open(os.path.join(OUT, 'towers.xml'), 'w').write(src)
 logo = final.crop((560, 150, 560 + 300, 150 + 300)).resize((50, 50), Image.LANCZOS)
 logo.save(os.path.join(OUT, 'map_logo.png'))
 
-n_path = len(PT)
-mincover = min(COVER[p] for p in PT if 2 < p[0] < W - 3)
+length = sum(math.dist(a_, b_) for a_, b_ in zip(PATH_PX, PATH_PX[1:]))
+mincover = min(COVER[i] for i in INNER)
+low = [(int(SAMPLES[i][0]), int(SAMPLES[i][1]), COVER[i]) for i in INNER if COVER[i] < 2]
+print('weak stretches (x, y, spots in reach):', low[:12])
 total_enemies = sum(e[5] for _, es in waves for e in es)
-print('path tiles %d (length about %d tiles), spots %d of %d tiles, every path tile (bar the ends) covered by at least %d spots, %d enemies in %d waves'
-      % (n_path, sum(abs(a[0] - b[0]) + abs(a[1] - b[1]) for a, b in zip(PATH, PATH[1:])), len(SPOTS), W * H, mincover, total_enemies, len(waves)))
+print('trail %d px (about %d tiles, %d way points), %d spots of %d tiles, every stretch (bar the ends) in reach of at least %d spots, %d enemies in %d waves'
+      % (length, length // T, len(PATH_PX), len(SPOTS), W * H, mincover, total_enemies, len(waves)))

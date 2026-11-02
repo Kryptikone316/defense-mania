@@ -1,13 +1,36 @@
 <?xml version='1.0'?>
   <pathfinding>
     <waypoints>
-      <waypoint id='0'>24,168,2</waypoint>
-      <waypoint id='1'>456,168,2</waypoint>
-      <waypoint id='2'>456,552,2</waypoint>
-      <waypoint id='3'>168,552,2</waypoint>
-      <waypoint id='4'>168,360,2</waypoint>
-      <waypoint id='5'>744,360,2</waypoint>
-      <waypoint id='6'>744,648,2</waypoint>
-      <waypoint id='7'>936,648,2</waypoint>
+      <waypoint id='0'>24,120,2</waypoint>
+      <waypoint id='1'>130,96,2</waypoint>
+      <waypoint id='2'>215,170,2</waypoint>
+      <waypoint id='3'>310,140,2</waypoint>
+      <waypoint id='4'>395,205,2</waypoint>
+      <waypoint id='5'>365,300,2</waypoint>
+      <waypoint id='6'>270,345,2</waypoint>
+      <waypoint id='7'>175,315,2</waypoint>
+      <waypoint id='8'>110,395,2</waypoint>
+      <waypoint id='9'>150,495,2</waypoint>
+      <waypoint id='10'>250,535,2</waypoint>
+      <waypoint id='11'>355,505,2</waypoint>
+      <waypoint id='12'>430,420,2</waypoint>
+      <waypoint id='13'>525,455,2</waypoint>
+      <waypoint id='14'>560,555,2</waypoint>
+      <waypoint id='15'>480,640,2</waypoint>
+      <waypoint id='16'>590,668,2</waypoint>
+      <waypoint id='17'>700,610,2</waypoint>
+      <waypoint id='18'>715,505,2</waypoint>
+      <waypoint id='19'>640,405,2</waypoint>
+      <waypoint id='20'>720,320,2</waypoint>
+      <waypoint id='21'>640,235,2</waypoint>
+      <waypoint id='22'>545,255,2</waypoint>
+      <waypoint id='23'>520,160,2</waypoint>
+      <waypoint id='24'>610,95,2</waypoint>
+      <waypoint id='25'>720,120,2</waypoint>
+      <waypoint id='26'>800,200,2</waypoint>
+      <waypoint id='27'>860,300,2</waypoint>
+      <waypoint id='28'>830,410,2</waypoint>
+      <waypoint id='29'>880,520,2</waypoint>
+      <waypoint id='30'>936,600,2</waypoint>
     </waypoints>
   </pathfinding>
