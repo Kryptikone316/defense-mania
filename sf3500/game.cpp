@@ -693,6 +693,17 @@ void Tower::displayArrow()
 		arrowPosition[0] = cosf(ang) * (c - (proz * c));
 		arrowPosition[1] = sinf(ang) * (c - (proz * c));
 		int alpha = ((proz < 0.10f || proz > 0.95f)) ? 80 : 255;
+		float ax = enemyPosition[0] + arrowPosition[0], ay = enemyPosition[1] + arrowPosition[1];
+		if (!(ax - ax == 0) || !(ay - ay == 0) || dist(ax, ay, tx, ty) > c + tile)   /* never draw a shot that is not on its way */
+		{
+			static int logged;
+			if (logged++ < 10)
+			{
+				printf("arrow glitch: tower %d,%d (%s) angle %.2f shot at %.0f,%.0f arrow at %.0f,%.0f after %d ms\n", position[0], position[1], name.c_str(), ang, enemyPosition[0], enemyPosition[1], ax, ay, (int)gnow() - shootingCount);
+				fflush(stdout);
+			}
+			return;
+		}
 		if (proz > 0.05f && frame_ok(sheet, (currentUpdate * 9) + 6 + animationState, 2))
 			draw_image_rot(sheet->img, ((currentUpdate * 9) + 6 + animationState) * sheet->tile, 2 * sheet->tile, sheet->tile, sheet->tile,
 			               enemyPosition[0] + arrowPosition[0] - camX, enemyPosition[1] + arrowPosition[1] - camY, ang, alpha);
