@@ -1,4 +1,5 @@
 #include "game.hpp"
+#include "audio.hpp"
 
 #include <algorithm>
 #include <math.h>
@@ -135,6 +136,7 @@ void Enemy::checkWP()
 		if (reachingEndpoint)
 		{
 			map->lifes--;
+			sfx_play(SFX_LIFELOST);
 			if (map->lifes == 0)
 				map->loseGame();
 			enemyAlive = false;
@@ -244,6 +246,7 @@ void Enemy::getDamage(int dmg, float freeze)
 		enemyAlive = false;
 		dieCount = millis();
 		map->money += money;
+		sfx_play(SFX_DIE);
 	}
 }
 
@@ -447,6 +450,7 @@ void Tower::repair()
 	{
 		map->money -= repairCosts();
 		health = maxHealth;
+		sfx_play(SFX_REPAIR);
 	}
 }
 
@@ -460,6 +464,7 @@ void Tower::upgrade()
 		costs += ucosts[currentUpdate];
 		map->money -= ucosts[currentUpdate];
 		currentUpdate++;
+		sfx_play(SFX_UPGRADE);
 	}
 }
 
@@ -470,6 +475,7 @@ void Tower::enemyDamage(int dmg)
 	{
 		destroyed = true;
 		destroyCount = millis();
+		sfx_play(SFX_CRUMBLE);
 	}
 }
 
@@ -499,6 +505,7 @@ void Tower::shoot(float x, float y)
 	shootingCount = millis();
 	shooting = true;
 	enemyLastHit = millis();
+	sfx_play(freeze > 0 ? SFX_FREEZE : splash ? SFX_CATAPULT : SFX_ARROW);
 }
 
 void Tower::display()
@@ -802,13 +809,17 @@ void Map::addTower(int type, int tx, int ty)
 			startGame();
 		money -= t.costs;
 		towers.push_back(new Tower(t, tx, ty, this));
+		sfx_play(SFX_BUILD);
 	}
+	else
+		sfx_play(SFX_ERROR);
 }
 
 void Map::sellTower(Tower *t)
 {
 	money += (int)(t->costs * 0.8);
 	removeTower(t);
+	sfx_play(SFX_SELL);
 }
 
 static std::vector<Tower *> g_graveyard;
@@ -896,8 +907,8 @@ void Map::display()
 void Map::startMessage() { actionTimer = millis(); action = 5; }
 void Map::startGame() { gameStarted = true; actionTimer = millis(); action = 1; }
 void Map::continueNextWave() { actionTimer = millis(); action = 2; }
-void Map::wonGame() { actionTimer = millis(); action = 3; globalSpeed = 0; defeated = true; }
-void Map::loseGame() { actionTimer = millis(); action = 4; defeated = true; globalSpeed = 0; }
+void Map::wonGame() { actionTimer = millis(); action = 3; globalSpeed = 0; defeated = true; sfx_play(SFX_WIN); }
+void Map::loseGame() { actionTimer = millis(); action = 4; defeated = true; globalSpeed = 0; sfx_play(SFX_LOSE); }
 
 static void big_text(const char *s, int size, int yoff = 0)
 {
@@ -912,15 +923,21 @@ void Map::displayActions()
 	case 1:
 		if (dt <= 8000)
 		{
-			if (dt <= 3000) big_text("Prepare!", 34, -20);
-			else if (dt <= 4000) big_text("3", 52, -30);
-			else if (dt <= 5000) big_text("2", 52, -30);
-			else if (dt <= 6000) big_text("1", 52, -30);
+			static int lastStep;
+			int step = dt <= 3000 ? 0 : dt <= 4000 ? 1 : dt <= 5000 ? 2 : dt <= 6000 ? 3 : 4;
+			if (step != lastStep && step > 0)
+				sfx_play(step == 4 ? SFX_GO : SFX_TICK);
+			lastStep = step;
+			if (step == 0) big_text("Prepare!", 34, -20);
+			else if (step == 1) big_text("3", 52, -30);
+			else if (step == 2) big_text("2", 52, -30);
+			else if (step == 3) big_text("1", 52, -30);
 			else big_text("GO!", 56, -34);
 		}
 		else
 		{
 			waves->nextWave();
+			sfx_play(SFX_WAVE);
 			action = 0;
 		}
 		break;
@@ -928,6 +945,7 @@ void Map::displayActions()
 		if (dt >= 2000)
 		{
 			waves->nextWave();
+			sfx_play(SFX_WAVE);
 			action = 0;
 		}
 		break;

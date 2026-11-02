@@ -58,8 +58,9 @@ static void load_settings()
 		{
 			if (!strcmp(key, "hq")) optHQ = v != 0;
 			else if (!strcmp(key, "fps")) optShowFps = v != 0;
-			else if (!strcmp(key, "music")) music_set_enabled(v != 0);
+			else if (!strcmp(key, "master")) audio_set_master(v);
 			else if (!strcmp(key, "music_volume")) music_set_volume(v);
+			else if (!strcmp(key, "sfx_volume")) sfx_set_volume(v);
 		}
 	fclose(f);
 }
@@ -69,7 +70,7 @@ static void save_settings()
 	FILE *f = fopen(settings_path().c_str(), "w");
 	if (!f)
 		return;
-	fprintf(f, "hq = %d\nfps = %d\nmusic = %d\nmusic_volume = %d\n", optHQ, optShowFps, music_enabled(), music_volume());
+	fprintf(f, "hq = %d\nfps = %d\nmaster = %d\nmusic_volume = %d\nsfx_volume = %d\n", optHQ, optShowFps, audio_master(), music_volume(), sfx_volume());
 	fclose(f);
 }
 
@@ -168,38 +169,43 @@ static Screen screen_play()
 static Screen screen_options(int &sel)
 {
 	gfx_clear(0, 0, 0);
-	const char *name[4] = { "HQ GRAPHICS", "SHOW FPS", "MUSIC", "VOLUME" };
-	const char *help[4] = {
-		"Adds a light overlay on the map: this costs\nperformance. Takes effect on the next match.",
-		"Shows the current frame rate.",
-		dir_exists("music") ? "Background music, a track from the folder\nof the map in the music folder."
-		                    : "No music pack installed. Put its music folder\nnext to the game to hear it (optional).",
-		"Left/Right changes the music volume." };
-	char vol[16];
-	snprintf(vol, sizeof vol, "%d%%", music_volume());
-	std::string state[4] = { optHQ ? "ON" : "OFF", optShowFps ? "ON" : "OFF", music_enabled() ? "ON" : "OFF", vol };
-	bool on[4] = { optHQ, optShowFps, music_enabled(), music_volume() > 0 };
-	for (int i = 0; i < 4; i++)
+	const char *name[5] = { "VOLUME", "MUSIC", "EFFECTS", "HQ GRAPHICS", "SHOW FPS" };
+	const char *help[5] = {
+		"Left/Right: overall volume, music and\neffects together.",
+		dir_exists("music") ? "Left/Right: music volume. 0 turns it off.\nA random track of the map's own folder."
+		                    : "Left/Right: music volume. No music pack is\ninstalled; its music folder goes next to the game.",
+		"Left/Right: volume of the sound effects\n(shots, building, the wave horn ...).",
+		"A: adds a light overlay on the map, which costs\nperformance. Takes effect on the next match.",
+		"A: shows the current frame rate." };
+	char v0[16], v1[16], v2[16];
+	snprintf(v0, sizeof v0, "%d%%", audio_master());
+	snprintf(v1, sizeof v1, "%d%%", music_volume());
+	snprintf(v2, sizeof v2, "%d%%", sfx_volume());
+	std::string state[5] = { v0, v1, v2, optHQ ? "ON" : "OFF", optShowFps ? "ON" : "OFF" };
+	bool on[5] = { audio_master() > 0, music_volume() > 0, sfx_volume() > 0, optHQ, optShowFps };
+	for (int i = 0; i < 5; i++)
 	{
-		int y = 26 + i * 62;
-		draw_button(name[i], 40, y, 190, 26, i == sel || (on[i] && i < 3), 20);
+		int y = 14 + i * 53;
+		draw_button(name[i], 40, y, 190, 26, i == sel, 20);
 		draw_text(state[i], 250, y + 3, 16, on[i] ? 0x89F9FF : 0x909090, ALIGN_LEFT, 0);
-		draw_text(help[i], 330, y + 2, 11, 0xE6E6E6, ALIGN_LEFT, 1);
+		draw_text(help[i], 330, y + 1, 11, 0xE6E6E6, ALIGN_LEFT, 1);
 		if (i == sel)
-			rect_outline(34, y - 7, SW - 68, 42, 0x89F9FF, 120);
+			rect_outline(34, y - 6, SW - 68, 40, 0x89F9FF, 120);
 	}
 	draw_button("BACK", 40, SH - 54, 110, 26, false, 20);
-	draw_hint("Up/Down: choose    A: switch    Left/Right: volume    B: back");
+	draw_hint("Up/Down: choose    Left/Right or A: change    B: back");
 	if (pressed(JK_UP) && sel > 0) sel--;
-	if (pressed(JK_DOWN) && sel < 3) sel++;
+	if (pressed(JK_DOWN) && sel < 4) sel++;
+	int step = (pressed(JK_RIGHT) ? 10 : 0) - (pressed(JK_LEFT) ? 10 : 0);
+	if (sel == 0 && step) audio_set_master(audio_master() + step);
+	if (sel == 1 && step) music_set_volume(music_volume() + step);
+	if (sel == 2 && step) { sfx_set_volume(sfx_volume() + step); sfx_play(SFX_BUILD); }
 	if (pressed(JK_A))
 	{
-		if (sel == 0) optHQ = !optHQ;
-		else if (sel == 1) optShowFps = !optShowFps;
-		else if (sel == 2) music_set_enabled(!music_enabled());
+		if (sel == 3) optHQ = !optHQ;
+		else if (sel == 4) optShowFps = !optShowFps;
+		else if (sel == 2) sfx_play(SFX_BUILD);
 	}
-	if (sel == 3 && pressed(JK_LEFT)) music_set_volume(music_volume() - 10);
-	if (sel == 3 && pressed(JK_RIGHT)) music_set_volume(music_volume() + 10);
 	if (pressed(JK_B))
 	{
 		save_settings();
@@ -560,6 +566,11 @@ int main()
 		if (held(JK_START) && held(JK_SELECT) && play.map && play.map->quitDialog)
 			break;
 
+		if (screen != S_GAME && screen != S_LOADING)
+		{
+			if (pressed(JK_UP) || pressed(JK_DOWN) || pressed(JK_LEFT) || pressed(JK_RIGHT)) sfx_play(SFX_MOVE);
+			if (pressed(JK_A)) sfx_play(SFX_SELECT);
+		}
 		Screen next = screen;
 		switch (screen)
 		{

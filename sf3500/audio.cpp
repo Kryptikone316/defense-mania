@@ -15,8 +15,14 @@
 #include "stb_vorbis.h"
 
 static bool g_ok;
+static int16_t *g_sfxPcm[SFX_COUNT];   /* 48 kHz stereo */
+static int g_sfxFrames[SFX_COUNT];
+static uint32_t g_sfxLast[SFX_COUNT];
+static Sf3500Voice *g_sfxVoices[24];
+static int g_sfxActive;
+
 static bool g_enabled = true;
-static int g_volume = 60;
+static int g_volume = 60, g_master = 80, g_sfxVolume = 80;
 static std::string g_folder, g_current;
 static std::vector<std::string> g_tracks;
 static Sf3500Voice *g_voice;
@@ -61,7 +67,7 @@ static void drop()
 	}
 }
 
-static float gain() { return g_volume / 100.0f * 0.9f * g_currentGain; }
+static float gain() { return g_master / 100.0f * g_volume / 100.0f * 0.9f * g_currentGain; }
 
 static void start_track(const std::string &path)
 {
@@ -122,6 +128,8 @@ static void scan(const std::string &folder)
 	closedir(d);
 }
 
+static void sfx_load();
+
 void audio_init()
 {
 	srand((unsigned)time(NULL));
@@ -149,13 +157,19 @@ void audio_init()
 		}
 		fclose(lf);
 	}
-	g_enabled = cfg_num("music", 1) != 0;
+	g_master = (int)cfg_num("master_volume", 80);
 	g_volume = (int)cfg_num("music_volume", 60);
+	g_sfxVolume = (int)cfg_num("sfx_volume", 80);
+	g_enabled = g_volume > 0;
+	sfx_load();
 }
 
 void audio_shutdown()
 {
 	drop();
+	for (int i = 0; i < g_sfxActive; i++)
+		sf3500_voice_destroy(g_sfxVoices[i]);
+	g_sfxActive = 0;
 	if (g_ok)
 		sf3500_mixer_deinit();
 	g_ok = false;
@@ -186,25 +200,114 @@ void music_update()
 	}
 }
 
-void music_set_enabled(bool on)
+static void apply_music_state()
 {
-	if (on == g_enabled)
-		return;
-	g_enabled = on;
+	bool want = g_volume > 0 && g_master > 0;
 	if (!g_ok)
+	{
+		g_enabled = want;
 		return;
-	if (!on)
-		drop();
-	else
+	}
+	if (want && !g_enabled)
+	{
+		g_enabled = true;
 		pick_and_play();
+	}
+	else if (!want && g_enabled)
+	{
+		g_enabled = false;
+		drop();
+	}
+	if (g_voice)
+		sf3500_voice_set_gain(g_voice, gain());
 }
 
 void music_set_volume(int percent)
 {
 	g_volume = percent < 0 ? 0 : percent > 100 ? 100 : percent;
-	if (g_voice)
-		sf3500_voice_set_gain(g_voice, gain());
+	apply_music_state();
+}
+int music_volume() { return g_volume; }
+
+void audio_set_master(int percent)
+{
+	g_master = percent < 0 ? 0 : percent > 100 ? 100 : percent;
+	apply_music_state();
+}
+int audio_master() { return g_master; }
+
+/* ------------------------------------------------------------------ sound effects */
+static const char *sfx_names[SFX_COUNT] = {
+	"build", "error", "arrow", "catapult", "freeze", "die", "lifelost", "upgrade", "sell",
+	"repair", "crumble", "wave", "tick", "go", "win", "lose", "move", "select" };
+static const int sfx_gap[SFX_COUNT] = { 0, 150, 70, 90, 90, 60, 150, 0, 0, 0, 100, 0, 0, 0, 0, 0, 25, 25 };   /* ms between two of the same */
+
+static void sfx_load()
+{
+	for (int i = 0; i < SFX_COUNT; i++)
+	{
+		char path[96];
+		snprintf(path, sizeof path, "data/sfx/%s.wav", sfx_names[i]);
+		FILE *f = fopen(path, "rb");
+		if (!f)
+			continue;
+		fseek(f, 0, SEEK_END);
+		long size = ftell(f);
+		fseek(f, 0, SEEK_SET);
+		unsigned char *b = (unsigned char *)malloc(size);
+		if (b && fread(b, 1, size, f) == (size_t)size && size > 44)
+		{
+			/* our own files: RIFF, a 16-byte "fmt " chunk (mono, 16 bit, 48 kHz), then "data" */
+			long pos = 12;
+			while (pos + 8 <= size && memcmp(b + pos, "data", 4) != 0)
+				pos += 8 + (b[pos + 4] | b[pos + 5] << 8 | b[pos + 6] << 16) + ((b[pos + 4] & 1) ? 1 : 0);
+			if (pos + 8 <= size)
+			{
+				int n = (int)((size - pos - 8) / 2);
+				int16_t *pcm = (int16_t *)malloc((size_t)n * 4);
+				if (pcm)
+				{
+					const int16_t *src = (const int16_t *)(b + pos + 8);
+					for (int k = 0; k < n; k++)
+						pcm[k * 2] = pcm[k * 2 + 1] = src[k];
+					g_sfxPcm[i] = pcm;
+					g_sfxFrames[i] = n;
+				}
+			}
+		}
+		free(b);
+		fclose(f);
+	}
 }
 
-bool music_enabled() { return g_enabled; }
-int music_volume() { return g_volume; }
+void sfx_play(int id)
+{
+	if (!g_ok || id < 0 || id >= SFX_COUNT || !g_sfxPcm[id] || g_sfxVolume <= 0 || g_master <= 0)
+		return;
+	uint32_t now = millis();
+	if (now - g_sfxLast[id] < (uint32_t)sfx_gap[id])
+		return;
+	g_sfxLast[id] = now;
+	for (int i = 0; i < g_sfxActive; )   /* let go of the ones that have finished */
+	{
+		if (!sf3500_voice_playing(g_sfxVoices[i]))
+		{
+			sf3500_voice_destroy(g_sfxVoices[i]);
+			g_sfxVoices[i] = g_sfxVoices[--g_sfxActive];
+		}
+		else
+			i++;
+	}
+	if (g_sfxActive >= 24)
+		return;
+	Sf3500Voice *v = sf3500_voice_create_static(g_sfxPcm[id], g_sfxFrames[id]);
+	if (!v)
+		return;
+	sf3500_voice_set_relative(v, true);
+	sf3500_voice_set_gain(v, g_master / 100.0f * g_sfxVolume / 100.0f);
+	sf3500_voice_play(v);
+	g_sfxVoices[g_sfxActive++] = v;
+}
+
+void sfx_set_volume(int percent) { g_sfxVolume = percent < 0 ? 0 : percent > 100 ? 100 : percent; }
+int sfx_volume() { return g_sfxVolume; }
