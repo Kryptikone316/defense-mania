@@ -968,6 +968,7 @@ int main()
 			else
 			{
 				next = S_GAME;
+				lastFrame = millis();   /* the time spent loading is not a hitch */
 				padPrev = padNow = gfx_pad();
 				music_play_folder(music_folder_for(maps[mapPicked].url, maps[mapPicked].name));
 			}
