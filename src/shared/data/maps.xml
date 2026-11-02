@@ -7,6 +7,7 @@
     	<map name="Dark Woods" img="map_logo.png" url="woods.xml" size="20 x 15"></map>
     	<map name="River Side" img="map_logo.png" url="river_side.xml" size="20 x 15"></map>
     	<map name="The Swamp" img="map_logo.png" url="swamp.xml" size="20 x 15"></map>
+    	<map name="The Tundra" img="map_logo.png" url="tundra.xml" size="30 x 16"></map>
     	<map name="Bigger" img="map_logo.png" url="bigger.xml" size="40 x 18"></map>
     
     </standardmaps>    
