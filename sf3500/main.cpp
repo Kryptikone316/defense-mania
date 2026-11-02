@@ -262,12 +262,12 @@ static Screen screen_play()
 	fill_rect(listX, 89, 300, 1, 0x251002);
 	for (size_t i = 0; i < maps.size(); i++)
 	{
-		int y = 98 + (int)i * 40;
+		int y = 96 + (int)i * 35;
 		bool on = (int)i == mapPicked;
 		draw_text(maps[i].name, listX + 8, y + 2, 18, on ? 0x89F9FF : 0xD0D0D0, ALIGN_LEFT, 0);
 		draw_text(maps[i].size, listX + 292, y + 6, 11, on ? 0x89F9FF : 0x909090, ALIGN_RIGHT, 1);
 		if (on)
-			rect_outline(listX - 4, y - 4, 308, 34, 0x89F9FF, 150);
+			rect_outline(listX - 4, y - 4, 308, 31, 0x89F9FF, 150);
 	}
 	if (mapPicked >= 0 && mapPicked < (int)maps.size() && maps[mapPicked].logo.valid())
 		draw_image(maps[mapPicked].logo, SW - 70 - maps[mapPicked].logo.w, 98);
