@@ -7,6 +7,9 @@
 #include <SDL.h>
 #include <sys/stat.h>
 #include <math.h>
+#include <signal.h>
+#include <unistd.h>
+#include <ucontext.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -730,6 +733,19 @@ static void open_tower_menu(Play &p, int id)
 	p.menuTY = p.menuTower->position[1];
 }
 
+/* A tower that enemies destroy is removed and freed by the map while its menu may still be open: the menu lets go of
+ * it without touching it (it may already be gone) as soon as it is no longer one of the map's towers. */
+static void drop_menu_if_tower_gone(Play &p)
+{
+	if (!p.menuTower)
+		return;
+	for (size_t i = 0; i < p.map->towers.size(); i++)
+		if (p.map->towers[i] == p.menuTower)
+			return;
+	p.menuTower = NULL;
+	p.menuKind = 0;
+}
+
 static void play_input(Play &p, float dtMs)
 {
 	Map *m = p.map;
@@ -844,7 +860,8 @@ static void play_input(Play &p, float dtMs)
 static void play_draw(Play &p)
 {
 	Map *m = p.map;
-	m->display();
+	m->display();   /* may free a destroyed tower */
+	drop_menu_if_tower_gone(p);
 	m->displayActions();
 	/* the tile under the cursor */
 	if (!p.menuKind && !m->quitDialog && !m->pause)
@@ -884,9 +901,51 @@ static void play_draw(Play &p)
 		          SW / 2, SH - 84, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }
 
+/* ------------------------------------------------------------------ crash report */
+/* A fatal signal writes where it happened to log.txt (stderr): the fault address, the program counter and return
+ * address, the screen and map, and every word of the stack that looks like a code address, so the unstripped
+ * binary can name the function afterwards. */
+static volatile int g_screenNow = 0;
+static char g_mapNow[64] = "";
+extern "C" char __executable_start, etext;
+static void crash_report(int sig, siginfo_t *si, void *ctx)
+{
+	ucontext_t *uc = (ucontext_t *)ctx;
+	unsigned long pc = (unsigned long)uc->uc_mcontext.pc, ra = (unsigned long)uc->uc_mcontext.gregs[31];
+	unsigned long sp = (unsigned long)uc->uc_mcontext.gregs[29];
+	fprintf(stderr, "CRASH signal %d at address %p, pc %lx, ra %lx, sp %lx, base %lx, screen %d, map '%s'\n", sig, si->si_addr, pc, ra, sp, (unsigned long)&__executable_start, (int)g_screenNow, g_mapNow);
+	fprintf(stderr, "CRASH stack:");
+	int shown = 0;
+	for (unsigned long a = sp; a < sp + 4096 && shown < 40; a += 4)
+	{
+		unsigned long v = *(unsigned long *)a;
+		if (v >= (unsigned long)&__executable_start && v < (unsigned long)&etext)
+		{
+			fprintf(stderr, " %lx", v);
+			shown++;
+		}
+	}
+	fprintf(stderr, "\n");
+	fflush(stderr);
+	_exit(139);
+}
+static void crash_report_install()
+{
+	struct sigaction sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_sigaction = crash_report;
+	sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+	sigaction(SIGSEGV, &sa, NULL);
+	sigaction(SIGBUS, &sa, NULL);
+	sigaction(SIGFPE, &sa, NULL);
+	sigaction(SIGILL, &sa, NULL);
+	sigaction(SIGABRT, &sa, NULL);
+}
+
 /* ------------------------------------------------------------------ main */
 int main()
 {
+	crash_report_install();
 	if (!gfx_init())
 		return 1;
 	load_image("data/logo_dm.png", logo);
@@ -934,6 +993,8 @@ int main()
 			if (pressed(JK_A)) sfx_play(SFX_SELECT);
 		}
 		Screen next = screen;
+		g_screenNow = screen;
+		if (play.map) snprintf(g_mapNow, sizeof g_mapNow, "%s", maps[lastMap].name.c_str());
 		switch (screen)
 		{
 		case S_MAIN: next = screen_main(mainSel); break;
@@ -974,14 +1035,17 @@ int main()
 			}
 			break;
 		case S_GAME:
+			if (getenv("DM_CRASH_TEST") && (int)millis() - play.started > 4000) *(volatile int *)0 = 1;
 			if (getenv("DM_FAKE_RESULT") && (int)millis() - play.started > (getenv("DM_FAKE_DELAY") ? atoi(getenv("DM_FAKE_DELAY")) : 1500) && !play.map->finished)
 			{   /* test hook: end the match at once with some score */
 				play.map->killPoints = 640;
 				play.map->wavesCleared = atoi(getenv("DM_FAKE_RESULT"));
 				play.map->finished = true;
-				play.map->finishedWon = false;
+				play.map->finishedWon = getenv("DM_FAKE_WIN") != NULL;
 			}
+			drop_menu_if_tower_gone(play);
 			play_input(play, dt);
+			drop_menu_if_tower_gone(play);
 			play_draw(play);
 			if (play.map->finished)
 			{
