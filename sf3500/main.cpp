@@ -601,6 +601,8 @@ struct Play {
 	int started = 0;
 	int quitSel = 1;
 	int speed2 = 0;
+	uint32_t toastUntil = 0;   /* a short notice in the middle of the top edge */
+	const char *toast = "";
 };
 
 static Image repairIcon, updateIcon, sellIcon;
@@ -766,10 +768,12 @@ static void play_input(Play &p, float dtMs)
 		p.quitSel = 0;
 		return;
 	}
-	if (pressed(JK_R1) && !m->pause && !m->defeated)
+	if ((pressed(JK_R1) || pressed(JK_R2)) && !m->pause && !m->defeated)
 	{
 		p.speed2 = !p.speed2;
 		globalSpeed = p.speed2 ? 2.0f : 1.0f;
+		p.toast = p.speed2 ? "FAST FORWARD  x2" : "NORMAL SPEED";
+		p.toastUntil = millis() + 1500;
 	}
 	if (pressed(JK_X))
 		m->showBuildAreas = !m->showBuildAreas;
@@ -865,6 +869,8 @@ static void play_draw(Play &p)
 		draw_text("PAUSED", SW / 2, SH / 2 - 14, 28, 0xFFFFFF, ALIGN_CENTER, 2);
 	if (p.speed2 && !m->pause)
 		draw_text("x2", SW - 70, 19, 14, 0xFFE066, ALIGN_RIGHT, 2, 255, 0x000000);
+	if (millis() < p.toastUntil)
+		draw_text(p.toast, SW / 2, 44, 16, 0xFFE066, ALIGN_CENTER, 2, 255, 0x000000);
 	if (m->quitDialog)
 	{
 		fill_rect(SW / 2 - 150, SH / 2 - 56, 300, 112, 0x000000, 190);
@@ -874,7 +880,7 @@ static void play_draw(Play &p)
 		draw_button("YES", SW / 2 + 40, SH / 2 + 12, 70, 26, p.quitSel == 1, 18);
 	}
 	else if (!p.menuKind && !m->gameStarted && (int)millis() - p.started < 15000 && !m->pause)
-		draw_text("D-Pad: move   A: build / select   B: cancel   X: show build spots   R1: x2 speed   Start: pause   Select: menu",
+		draw_text("D-Pad: move   A: build / select   B: cancel   X: show build spots   R1 / R2: x2 speed   Start: pause   Select: menu",
 		          SW / 2, SH - 84, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }
 
@@ -908,6 +914,13 @@ int main()
 		uint32_t now = millis();
 		float dt = (float)(now - lastFrame);
 		lastFrame = now;
+		static int hitches;
+		if (dt > 250 && screen == S_GAME && hitches < 20)   /* a pause in the frames, noted in log.txt */
+		{
+			hitches++;
+			printf("frame hitch: %.0f ms\n", dt);
+			fflush(stdout);
+		}
 		padPrev = padNow;
 		padNow = gfx_pad();
 		if (held(JK_START) && held(JK_SELECT) && screen != S_GAME)

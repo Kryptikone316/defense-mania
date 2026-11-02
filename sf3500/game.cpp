@@ -12,6 +12,21 @@ bool optShowFps = false, optHQ = false;
 int camX = 0, camY = 0;
 
 static const float PI_F = 3.14159265f;
+
+/* The game's own clock. It runs at globalSpeed times real time (so the whole game, enemies, towers, arrows, spawns and
+ * animations alike, speeds up with the fast button and stops when paused) and one frame never counts for more than
+ * 100 ms, so a hiccup cannot make anything leap. Everything that happens in the match is timed with gnow(). */
+static uint32_t g_gameMs = 1000, g_lastReal;
+uint32_t gnow() { return g_gameMs; }
+void game_clock_reset() { g_lastReal = millis(); }
+static void game_clock_advance()
+{
+	uint32_t real = millis();
+	uint32_t d = real - g_lastReal;
+	g_lastReal = real;
+	if (d > 100) d = 100;
+	g_gameMs += (uint32_t)(d * globalSpeed + 0.5f);
+}
 static const uint32_t TEXT_GOLD = 0xFFF8C8;
 
 static float dist(float x1, float y1, float x2, float y2) { float dx = x1 - x2, dy = y1 - y2; return sqrtf(dx * dx + dy * dy); }
@@ -66,14 +81,14 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	money = (int)(def.num("money") * sc.money + 0.5f);
 	damage = (int)(def.num("damage") * map->difficulty * sc.damage + 0.5f);
 	animationSpeed = (float)def.num("animationspeed");
-	moveCount = millis();
+	moveCount = gnow();
 }
 
 void Enemy::calcFuture(int timeMs, float out[2]) const
 {
 	float px = ((float)moveSpeed / 1000) * timeMs;
-	out[0] = position[0] + moveVector[0] * globalSpeed * freezeFactorTemp * px;
-	out[1] = position[1] + moveVector[1] * globalSpeed * freezeFactorTemp * px;
+	out[0] = position[0] + moveVector[0] * freezeFactorTemp * px;
+	out[1] = position[1] + moveVector[1] * freezeFactorTemp * px;
 }
 
 void Enemy::setWaypoints(const int *s, const int *e, const std::vector<std::pair<int, int> > &wps)
@@ -85,7 +100,7 @@ void Enemy::setWaypoints(const int *s, const int *e, const std::vector<std::pair
 	position[1] = (float)start[1];
 	position[0] = (float)(start[0] - tileSize);
 	wpPosition = -1;
-	moveCount = millis();
+	moveCount = gnow();
 	calculateMoveVector();
 	/* the health bar sits just above the sprite's first visible row */
 	if (healthBarOffset == -1 && frame_ok(sheet, 1, 0))
@@ -97,7 +112,7 @@ void Enemy::setWaypoints(const int *s, const int *e, const std::vector<std::pair
 					break;
 				}
 	wayPointsSet = true;
-	moveCount = millis();
+	moveCount = gnow();
 }
 
 /* The way points may lie in any direction (The Swamp uses diagonals): the enemy walks straight at the next one. After
@@ -161,9 +176,9 @@ void Enemy::display()
 		int alpha = 255;
 		if (dieStep < 2)
 		{
-			if ((int)millis() - dieCount > 100)
+			if ((int)gnow() - dieCount > 100)
 			{
-				dieCount = millis();
+				dieCount = gnow();
 				dieStep++;
 			}
 		}
@@ -180,19 +195,19 @@ void Enemy::display()
 	{
 		uint32_t tint = 0xFFFFFF;
 		freezeFactorTemp = 1;
-		if (freezeCount > (int)millis() - freezeTime)
+		if (freezeCount > (int)gnow() - freezeTime)
 		{
 			freezeFactorTemp = freezeFactor;
 			tint = 0x0099CC;
 		}
 		else
 			frozen = false;
-		if (damage > 0 && (float)((int)millis() - fireCount) >= (fireRate / (globalSpeed * freezeFactorTemp)))
+		if (damage > 0 && (float)((int)gnow() - fireCount) >= (fireRate / freezeFactorTemp))
 		{
 			map->checkTowers((int)position[0], (int)position[1], fireRadius, damage);
-			fireCount = millis();
+			fireCount = gnow();
 		}
-		if ((float)((int)millis() - animationCount) >= (1000 / (animationSpeed * globalSpeed * freezeFactorTemp)))
+		if ((float)((int)gnow() - animationCount) >= (1000 / (animationSpeed * freezeFactorTemp)))
 		{
 			moveState += moveStateDirection;
 			if (moveState == 3 || moveState == -1)
@@ -200,21 +215,34 @@ void Enemy::display()
 				moveState = 1;
 				moveStateDirection *= -1;
 			}
-			animationCount = millis();
+			animationCount = gnow();
 		}
 		checkWP();
-		float dt = (float)((int)millis() - moveCount);
+		float dt = (float)((int)gnow() - moveCount);
 		float px = ((float)moveSpeed / 1000) * dt;
-		position[0] += moveVector[0] * globalSpeed * freezeFactorTemp * px;
-		position[1] += moveVector[1] * globalSpeed * freezeFactorTemp * px;
-		moveComplete += fabsf(moveVector[0] * globalSpeed * freezeFactorTemp * px) + fabsf(moveVector[1] * globalSpeed * freezeFactorTemp * px);
-		moveCount = millis();
+		static int traced;   /* a few lines in log.txt if an enemy ever leaps, to help find out why */
+		const bool trace = traced < 30;
+		float oldX = position[0], oldY = position[1];
+		position[0] += moveVector[0] * freezeFactorTemp * px;
+		position[1] += moveVector[1] * freezeFactorTemp * px;
+		if (trace)
+		{
+			float jump = dist(oldX, oldY, position[0], position[1]);
+			if (jump > 40 + px * 1.2f)
+			{
+				traced++;
+				printf("enemy jump: %p moved %.1f px (expected %.1f) in %.0f game ms, now at %.0f,%.0f, way point %d, speed x%.1f\n", (void *)this, jump, px, dt, position[0], position[1], wpPosition, globalSpeed);
+				fflush(stdout);
+			}
+		}
+		moveComplete += fabsf(moveVector[0] * freezeFactorTemp * px) + fabsf(moveVector[1] * freezeFactorTemp * px);
+		moveCount = gnow();
 		frame_corner(sheet, moveState, moveDirection, drawX, drawY, 255, tint);
 	}
 	if (gotHit)
 	{
 		Sheet *hs = map->charSets.get(hitCharset);
-		int dt = (int)millis() - hitCount, step = dt < 80 ? 0 : dt < 160 ? 1 : dt < 240 ? 2 : -1;
+		int dt = (int)gnow() - hitCount, step = dt < 80 ? 0 : dt < 160 ? 1 : dt < 240 ? 2 : -1;
 		if (step < 0)
 			gotHit = false;
 		else
@@ -240,7 +268,7 @@ void Enemy::getDamage(int dmg, float freeze)
 {
 	if (freeze > 0)
 	{
-		freezeCount = millis();
+		freezeCount = gnow();
 		freezeFactor = freeze;
 		frozen = true;
 		freezeTime = 2500;
@@ -250,7 +278,7 @@ void Enemy::getDamage(int dmg, float freeze)
 	{
 		moveComplete = 999999999;
 		enemyAlive = false;
-		dieCount = millis();
+		dieCount = gnow();
 		map->money += money;
 		map->killPoints += money * 5;
 		map->stats.goldEarned += money;
@@ -283,7 +311,7 @@ void Enemy::hitByTower(int dmg, float freeze, Tower *tower, float multiplier)
 void Enemy::hitAnimation(const std::string &cs, int x)
 {
 	gotHit = true;
-	hitCount = millis();
+	hitCount = gnow();
 	hitX = x;
 	hitCharset = cs;
 }
@@ -291,7 +319,7 @@ void Enemy::hitAnimation(const std::string &cs, int x)
 /* ------------------------------------------------------------------ wave */
 Wave::Wave(int distance, const std::vector<const XNode *> &enemies, Map *map, const WaveScale &scale) : enemyDistance(distance)
 {
-	wholeDistance = millis();
+	wholeDistance = gnow();
 	for (size_t i = 0; i < enemies.size(); i++)
 		for (int j = 0; j < (int)(enemies[i]->num("count") * scale.count + 0.5f); j++)
 		{
@@ -303,7 +331,7 @@ Wave::Wave(int distance, const std::vector<const XNode *> &enemies, Map *map, co
 }
 Wave::~Wave() { for (size_t i = 0; i < list.size(); i++) delete list[i]; }
 
-void Wave::start() { wholeDistance = millis(); starting = true; }
+void Wave::start() { wholeDistance = gnow(); starting = true; }
 
 void Wave::calcEnemyDistance()
 {
@@ -314,7 +342,7 @@ void Wave::calcEnemyDistance()
 	size_t again = 0;
 	for (size_t i = 0; i < list.size(); i++)
 	{
-		if ((int)millis() - wholeDistance > (int)(i * enemyDistance) + offset)
+		if ((int)gnow() - wholeDistance > (int)(i * enemyDistance) + offset)
 		{
 			if (!list[i]->wayPointsSet)
 			{
@@ -332,7 +360,7 @@ void Wave::calcEnemyDistance()
 void Wave::displayGui()
 {
 	for (size_t i = 0; i < list.size(); i++)
-		if ((int)millis() - wholeDistance > (int)(i * enemyDistance) + offset)
+		if ((int)gnow() - wholeDistance > (int)(i * enemyDistance) + offset)
 			list[i]->displayGui();
 }
 
@@ -356,7 +384,7 @@ Enemy *Wave::checkEnemy(int x, int y, int radius, float freeze)
 	{
 		Enemy *t = sorted[i];
 		if (dist((float)(int)t->position[0], (float)(int)t->position[1], (float)x, (float)y) <= radius && t->alive() && t->position[0] > 0)
-			if (freeze == 0 || !t->frozen || (t->freezeCount < (int)millis() - t->freezeTime + 300))
+			if (freeze == 0 || !t->frozen || (t->freezeCount < (int)gnow() - t->freezeTime + 300))
 				return t;
 	}
 	for (size_t i = 0; i < sorted.size(); i++)
@@ -524,7 +552,7 @@ void Tower::enemyDamage(int dmg)
 	{
 		destroyed = true;
 		map->stats.towersLost++;
-		destroyCount = millis();
+		destroyCount = gnow();
 		sfx_play(SFX_CRUMBLE);
 	}
 }
@@ -552,10 +580,10 @@ void Tower::shoot(float x, float y)
 	shootAngle = atanf(((((position[1] + 0.5f) * tile) - ((towerTileSize - tile) / 2)) - y) / dx);
 	enemyPosition[0] = x;
 	enemyPosition[1] = y;
-	shootingCount = millis();
+	shootingCount = gnow();
 	shooting = true;
 	map->stats.shots++;
-	enemyLastHit = millis();
+	enemyLastHit = gnow();
 	sfx_play(freeze > 0 ? SFX_FREEZE : splash ? SFX_CATAPULT : SFX_ARROW);
 }
 
@@ -568,7 +596,7 @@ void Tower::display()
 		if (drawingCount >= 5)
 		{
 			float a = shootAngle + (shootDirection * PI_F);
-			if ((int)millis() - enemyLastHit > 3000) towerDirection = 2;
+			if ((int)gnow() - enemyLastHit > 3000) towerDirection = 2;
 			else if (a > PI_F / 8 && a <= (PI_F * 3 / 8)) towerDirection = 1;
 			else if (a > (PI_F * 3 / 8) && a <= (PI_F * 5 / 8)) towerDirection = 0;
 			else if (a > (PI_F * 5 / 8) && a <= (PI_F * 7 / 8)) towerDirection = 5;
@@ -586,12 +614,12 @@ void Tower::display()
 			if (shooting && shootingAniState < 3 && hasShootingAnimation)
 			{
 				frame_center(sheet, (currentUpdate * 9) + shootingAniState + 3, towerDirection, cx, cy, 255, tint);
-				if ((int)millis() - shootingCount > fireRate * 0.08f * (shootingAniState + 1) && shootingAniState < 3)
+				if ((int)gnow() - shootingCount > fireRate * 0.08f * (shootingAniState + 1) && shootingAniState < 3)
 					shootingAniState++;
 			}
 			else
 			{
-				if ((float)((int)millis() - animationCount) >= (1000 / (5 * globalSpeed)))
+				if ((float)((int)gnow() - animationCount) >= (1000 / 5.0f))
 				{
 					animationState += animationStateDirection;
 					if (animationState == 3 || animationState == -1)
@@ -599,14 +627,14 @@ void Tower::display()
 						animationState = 1;
 						animationStateDirection *= -1;
 					}
-					animationCount = millis();
+					animationCount = gnow();
 				}
 				frame_center(sheet, (currentUpdate * 9) + animationState, towerDirection, cx, cy, 255, tint);
 			}
-			if ((float)((int)millis() - fireCount) >= (fireRate / globalSpeed))
+			if ((float)((int)gnow() - fireCount) >= (fireRate / 1.0f))
 			{
 				checkEnemy();
-				fireCount = millis();
+				fireCount = gnow();
 			}
 		}
 		else
@@ -614,7 +642,7 @@ void Tower::display()
 	}
 	else
 	{
-		int dt = (int)millis() - destroyCount, state = 8, alpha = 255;
+		int dt = (int)gnow() - destroyCount, state = 8, alpha = 255;
 		if (dt < 100) state = 6;
 		else if (dt < 200) state = 7;
 		else if (dt < 400) {}
@@ -656,11 +684,11 @@ void Tower::displayArrow()
 	if (!shooting)
 		return;
 	int tile = map->tileSize;
-	if ((int)millis() - shootingCount < (fireRate * 0.5f))
+	if ((int)gnow() - shootingCount < (fireRate * 0.5f))
 	{
 		float tx = (position[0] + 0.5f) * tile, ty = ((position[1] + 0.5f) * tile) - ((towerTileSize - tile) / 2);
 		float c = dist(tx, ty, enemyPosition[0], enemyPosition[1]);
-		float proz = (float)((int)millis() - shootingCount) / (fireRate * 0.7f);
+		float proz = (float)((int)gnow() - shootingCount) / (fireRate * 0.7f);
 		float ang = shootAngle + (shootDirection * PI_F);
 		arrowPosition[0] = cosf(ang) * (c - (proz * c));
 		arrowPosition[1] = sinf(ang) * (c - (proz * c));
@@ -683,7 +711,7 @@ void Tower::displayArrow()
 				shootAt->hitAnimation(sheetFile, 6 + currentUpdate * 9);
 			else
 			{
-				hitAniCount = millis();
+				hitAniCount = gnow();
 				hitAniPos[0] = (float)(int)enemyPosition[0];
 				hitAniPos[1] = (float)(int)enemyPosition[1];
 				hitAniBool = true;
@@ -698,7 +726,7 @@ void Tower::hitAnimation()
 {
 	if (!hitAniBool)
 		return;
-	int dt = (int)millis() - hitAniCount;
+	int dt = (int)gnow() - hitAniCount;
 	if (dt >= 240)
 	{
 		hitAniBool = false;
@@ -722,6 +750,7 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 	grade_set_map(id.c_str());
 	globalSpeed = 1.0f;
 	camX = camY = 0;
+	game_clock_reset();
 
 	XNode tree, wp, ts;
 	if (!xml_load(path + "/maptree.xml", tree) || !xml_load(path + "/waypoints.xml", wp) || !xml_load(path + "/towers.xml", ts))
@@ -902,6 +931,7 @@ static bool by_y(const DrawItem &a, const DrawItem &b) { return a.y < b.y; }
 
 void Map::display()
 {
+	game_clock_advance();
 	blit565_window(mapImage, camX, camY);
 	if (showBuildAreas)
 		for (int i = 0; i < cols; i++)
