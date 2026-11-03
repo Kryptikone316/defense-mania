@@ -78,9 +78,9 @@ inline void px565(uint16_t v, float &r, float &g, float &b)
 /* the driver's rotate-and-scale as measured on the device: a quarter turn clockwise, 640 x 358 -> 640 x 240, bilinear,
  * (measured exactly from the device: slot (xs, ys) reads canvas (ys * 640 / 240, 357 - xs * 358 / 640); the right slot of a pair is the same
  * picture half a slot pixel further along) */
-void model_pixel(const uint16_t *c, float xs, float ys, float out[3])
+void model_pixel(const uint16_t *c, float xs, float ys, float out[3], float ox = 0.0f)
 {
-	float xc = ys * g_W / (float)SLOT_H;
+	float xc = ys * g_W / (float)SLOT_H + ox;
 	float yc = (g_H - 1) - xs * g_H / (float)SLOT_W;
 	if (xc < 0) xc = 0;
 	if (yc < 0) yc = 0;
@@ -120,15 +120,14 @@ struct Tap
 	uint16_t w00, w10, w01, w11;   /* weights, summing to 256 */
 	uint16_t cell;
 };
-std::vector<Tap> g_taps;           /* sample order: row, word, pixel of the word (0 then 1) */
+std::vector<Tap> g_taps, g_tapsR;   /* sample order: row, word, pixel of the word (0 then 1); left slot, right slot */
+const Tap *g_tp = NULL;            /* the set in use */
 int g_cellCount[NCELLS];
 uint8_t g_lut5[32], g_lut6[64];
 
-void build_tables()
+void build_set(std::vector<Tap> &taps, float ox)
 {
-	for (int i = 0; i < 32; i++) g_lut5[i] = (uint8_t)(i * 255 / 31);
-	for (int i = 0; i < 64; i++) g_lut6[i] = (uint8_t)(i * 255 / 63);
-	g_taps.resize((size_t)SAMPLES * 2);
+	taps.resize((size_t)SAMPLES * 2);
 	memset(g_cellCount, 0, sizeof g_cellCount);
 	size_t t = 0;
 	for (int r = 0; r < SAMPLE_ROWS; r++)
@@ -136,7 +135,7 @@ void build_tables()
 			for (int sub = 0; sub < 2; sub++, t++)
 			{
 				int xs = k * WORD_STEP * 2 + sub, ys = r * ROW_STEP;
-				float xc = ys * g_W / (float)SLOT_H;
+				float xc = ys * g_W / (float)SLOT_H + ox;
 				float yc = (g_H - 1) - xs * g_H / (float)SLOT_W;
 				if (xc < 0) xc = 0;
 				if (yc < 0) yc = 0;
@@ -144,7 +143,7 @@ void build_tables()
 				if (yc > g_H - 1) yc = (float)(g_H - 1);
 				int x0 = (int)xc, y0 = (int)yc, x1 = x0 + 1 < g_W ? x0 + 1 : x0, y1 = y0 + 1 < g_H ? y0 + 1 : y0;
 				float fx = xc - x0, fy = yc - y0;
-				Tap &p = g_taps[t];
+				Tap &p = taps[t];
 				p.i00 = (uint32_t)(y0 * g_W + x0);
 				p.i10 = (uint32_t)(y0 * g_W + x1);
 				p.i01 = (uint32_t)(y1 * g_W + x0);
@@ -160,13 +159,22 @@ void build_tables()
 			}
 }
 
+void build_tables()
+{
+	for (int i = 0; i < 32; i++) g_lut5[i] = (uint8_t)(i * 255 / 31);
+	for (int i = 0; i < 64; i++) g_lut6[i] = (uint8_t)(i * 255 / 63);
+	build_set(g_taps, 0.0f);
+	build_set(g_tapsR, 1.5f);   /* the right slot of a pair: the same picture half a slot pixel further along */
+	g_tp = g_taps.data();
+}
+
 /* cell errors of a slot's samples against the model of a frame; returns the mean cell error */
 float eval_slot(const uint32_t *w, const uint16_t *canvas, float cellErr[NCELLS])
 {
 	int sumS[NCELLS][3], sumM[NCELLS][3];
 	memset(sumS, 0, sizeof sumS);
 	memset(sumM, 0, sizeof sumM);
-	const Tap *tp = g_taps.data();
+	const Tap *tp = g_tp;
 	for (int i = 0; i < SAMPLES; i++)
 	{
 		uint32_t word = w[i];
@@ -206,7 +214,7 @@ double since_start() { return (now_us() - g_t0) / 1e6; }
 long g_cls[3] = {0, 0, 0};          /* anomalies whose best match in the whole ring is: the chosen frame, another frame, no frame */
 long g_deltaHist[9] = {};           /* other frame minus chosen frame, -4..+4 (index 0..8) */
 long g_deltaOut = 0;
-long g_known = 0;                   /* unexplained anomalies that only repeat a mismatch already seen in the same cells */
+long g_known = 0, g_rightChecks = 0, g_rightAnom = 0;                   /* unexplained anomalies that only repeat a mismatch already seen in the same cells */
 int g_noCount[NCELLS];
 float g_noErr[NCELLS];                /* ... or farther away */
 
@@ -273,13 +281,87 @@ int calibrate(float cellErr[NCELLS])
 	return bestOff;
 }
 
+
+/* a quick measure of how well a frame explains a slot: every 24th sample, plain differences */
+float coarse_err(const uint32_t *w, const uint16_t *canvas)
+{
+	long sum = 0, n = 0;
+	for (int i = 0; i < SAMPLES; i += 8)
+	{
+		uint32_t word = w[i];
+		for (int sub = 0; sub < 2; sub++)
+		{
+			const Tap *tp = &g_tp[(size_t)i * 2 + sub];
+			uint32_t v = (word >> (16 * sub)) & 0xFFFF;
+			uint32_t a = canvas[tp->i00], b = canvas[tp->i10], cc = canvas[tp->i01], d = canvas[tp->i11];
+			int r = (g_lut5[a >> 11] * tp->w00 + g_lut5[b >> 11] * tp->w10 + g_lut5[cc >> 11] * tp->w01 + g_lut5[d >> 11] * tp->w11) >> 8;
+			int g = (g_lut6[(a >> 5) & 63] * tp->w00 + g_lut6[(b >> 5) & 63] * tp->w10 + g_lut6[(cc >> 5) & 63] * tp->w01 + g_lut6[(d >> 5) & 63] * tp->w11) >> 8;
+			int bl = (g_lut5[a & 31] * tp->w00 + g_lut5[b & 31] * tp->w10 + g_lut5[cc & 31] * tp->w01 + g_lut5[d & 31] * tp->w11) >> 8;
+			sum += abs(r - (int)g_lut5[v >> 11]) + abs(g - (int)g_lut6[(v >> 5) & 63]) + abs(bl - (int)g_lut5[v & 31]);
+			n++;
+		}
+	}
+	return n ? (float)sum / (3.0f * n) : 1e30f;
+}
+
+/* the frames (of the ones kept) that a slot's samples fit best, best first */
+const int NPICK = 10;
+int pick_frames(const uint32_t *w, uint32_t out[NPICK])
+{
+	uint32_t newest = g_sent;
+	float sc[NPICK];
+	int n = 0;
+	for (uint32_t k = 1; k < (uint32_t)RING - 3 && k <= newest; k++)
+	{
+		uint32_t cand = newest - k;
+		const FrameRec *fr = frame_at(cand);
+		if (!fr) continue;
+		float c = coarse_err(w, fr->px);
+		int pos = n < NPICK ? n : NPICK;
+		while (pos > 0 && sc[pos - 1] > c) pos--;
+		if (pos >= NPICK) continue;
+		int last = n < NPICK ? n : NPICK - 1;
+		for (int j = last; j > pos; j--) { sc[j] = sc[j - 1]; out[j] = out[j - 1]; }
+		sc[pos] = c;
+		out[pos] = cand;
+		if (n < NPICK) n++;
+	}
+	return n;
+}
+
+/* the frame a slot shows: of the few that fit best at a glance, the first one no cell is far off from, else the best one */
+uint32_t pick_frame(const uint32_t *w, bool &found, float *errOut, const float *base, bool haveBase)
+{
+	uint32_t cand[NPICK];
+	int n = pick_frames(w, cand);
+	found = n > 0;
+	if (!n) return 0;
+	float e[NCELLS];
+	uint32_t best = cand[0];
+	for (int i = 0; i < n; i++)
+	{
+		const FrameRec *fr = frame_at(cand[i]);
+		if (!fr) continue;
+		eval_slot(w, fr->px, e);
+		int bad = 0;
+		for (int c = 0; c < NCELLS; c++)
+			if (e[c] > (haveBase ? base[c] : 0.0f) + 5 && e[c] > 7) bad++;
+		if (i == 0 || bad == 0) { best = cand[i]; memcpy(errOut, e, sizeof(float) * NCELLS); }
+		if (bad == 0) break;
+	}
+	return best;
+}
+
 void *reader_main(void *)
 {
 	setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 5);
-	std::vector<uint32_t> w(SAMPLES), w2(SAMPLES);
+	std::vector<uint32_t> w(SAMPLES), w2(SAMPLES), wR(SAMPLES), wR2(SAMPLES);
 	float errA[NCELLS], errB[NCELLS], err2[NCELLS];
-	float base[NCELLS];
-	bool haveBase = false;
+	float base[NCELLS], baseR[NCELLS];
+	bool haveBase = false, haveBaseR = false;
+	int lastWorstR[PAIRS];
+	double lastTimeR[PAIRS];
+	for (int i = 0; i < PAIRS; i++) { lastWorstR[i] = -1; lastTimeR[i] = -100; }
 	int off = -1;
 	uint64_t lastCal = 0, lastStatus = now_us();
 	uint32_t lastRep[PAIRS];
@@ -297,7 +379,7 @@ void *reader_main(void *)
 			usleep(100000);
 			continue;
 		}
-		if (!g_fake && (off < 0 || now - lastCal > 30000000ull || unmatchedRun > 20))
+		if (false && !g_fake && (off < 0 || now - lastCal > 30000000ull || unmatchedRun > 20))
 		{
 			uint64_t c0 = now_us();
 			int o = calibrate(errA);
@@ -308,58 +390,35 @@ void *reader_main(void *)
 			unmatchedRun = 0;
 			if (off < 0) { usleep(200000); continue; }
 		}
-		if (g_fake && off < 0)
+		if (off < 0)
 			off = 0;
 		for (int p = 0; p < PAIRS && !g_stop; p++)
 		{
 			n = g_sent;   /* a scan takes a while: frames keep coming, and slots get rewritten under it */
 			now = now_us();
-			/* the newest frame that belongs in this slot and is old enough to have been rendered */
-			uint32_t f = 0;
-			bool found = false;
-			for (uint32_t k = 1; k < (uint32_t)RING - 4 && k <= n; k++)
-			{
-				uint32_t cand = n - k;
-				const FrameRec *fr = frame_at(cand);
-				if (!fr || (cand + off) % PAIRS != (uint32_t)p)
-					continue;
-				if (fr->t + g_minAge > now)
-					continue;
-				f = cand;
-				found = true;
-				break;
-			}
-			if (!found)
-				continue;
+			/* which frame is in this slot? Nothing is assumed about the driver's order: a quick comparison (every 24th sample)
+			 * with every frame we kept picks it, then that frame is checked in full */
 			uint64_t tr0 = now_us();
 			read_slot(p * 2, w.data());
 			readMs += (now_us() - tr0) / 1000.0;
 			reads++;
+			uint64_t te0 = now_us();
+			bool found = false;
+			float errP[NCELLS];
+			uint32_t f = pick_frame(w.data(), found, errP, base, haveBase);
+			if (!found)
+				continue;
 			const FrameRec *fa = frame_at(f);
-			const FrameRec *fb = frame_at(f + PAIRS);   /* the slot may already hold the next frame of its turn */
-			const FrameRec *fo = f >= (uint32_t)PAIRS ? frame_at(f - PAIRS) : NULL;   /* or still the previous one, if the driver is late */
 			if (!fa)
 				continue;
-			uint64_t te0 = now_us();
-			float ma = eval_slot(w.data(), fa->px, errA), mb = 1e30f, mo = 1e30f;
+			memcpy(errA, errP, sizeof errA);
+			float ma = 0;
+			for (int c = 0; c < NCELLS; c++) ma += errA[c];
+			ma /= NCELLS;
 			evals++;
 			uint32_t chosen = f;
 			float *err = errA;
 			float mean = ma;
-			if (fb)
-			{
-				mb = eval_slot(w.data(), fb->px, errB);
-				if (mb < ma) { chosen = f + PAIRS; err = errB; mean = mb; }
-			}
-			if (fo && ma > 6)
-			{
-				mo = eval_slot(w.data(), fo->px, err2);
-				if (mo < mean)
-				{
-					st.pending++;   /* not rendered yet: the slot still shows the frame of its previous turn */
-					continue;
-				}
-			}
 			evalMs += (now_us() - te0) / 1000.0;
 			st.checks++;
 			if (mean > 8)
@@ -394,22 +453,13 @@ void *reader_main(void *)
 				uint32_t chosen2 = chosen;
 				const FrameRec *fc = NULL;
 				{
-					float bestMean = 1e30f;
-					uint32_t cands[3] = { f, f + PAIRS, f >= (uint32_t)PAIRS ? f - PAIRS : 0xFFFFFFFFu };
-					for (int ci = 0; ci < 3; ci++)
+					bool ok2 = false;
+					uint32_t c2 = pick_frame(w2.data(), ok2, err2, base, haveBase);
+					if (ok2 && frame_at(c2))
 					{
-						const FrameRec *cf = cands[ci] == 0xFFFFFFFFu ? NULL : frame_at(cands[ci]);
-						if (!cf) continue;
-						float m2 = eval_slot(w2.data(), cf->px, ci == 0 ? err2 : errB);
-						if (m2 < bestMean)
-						{
-							bestMean = m2;
-							chosen2 = cands[ci];
-							fc = cf;
-						}
+						chosen2 = c2;
+						fc = frame_at(c2);
 					}
-					if (fc)
-						eval_slot(w2.data(), fc->px, err2);
 				}
 				chosen = chosen2;
 				if (fc)
@@ -505,6 +555,59 @@ void *reader_main(void *)
 			}
 			for (int c = 0; c < NCELLS; c++)
 				base[c] = base[c] * 0.97f + err[c] * 0.03f;
+			/* the right slot of the pair: the same picture, half a slot pixel further along; same frame unless it fits another better */
+			{
+				read_slot(p * 2 + 1, wR.data());
+				g_tp = g_tapsR.data();
+				float errR[NCELLS];
+				uint32_t cf = chosen;
+				const FrameRec *rf = frame_at(cf);
+				int bad = 0;
+				if (rf)
+				{
+					eval_slot(wR.data(), rf->px, errR);
+					g_rightChecks++;
+					if (haveBaseR)
+						for (int c = 0; c < NCELLS; c++)
+							if (errR[c] > baseR[c] + 5 && errR[c] > 7) bad++;
+				}
+				if (rf && !haveBaseR)
+				{
+					memcpy(baseR, errR, sizeof baseR);
+					haveBaseR = true;
+				}
+				else if (bad)
+				{
+					usleep(g_rereadUs);
+					read_slot(p * 2 + 1, wR2.data());
+					bool okR = false;
+					uint32_t c2 = pick_frame(wR2.data(), okR, errR, baseR, haveBaseR);
+					bad = 0;
+					int worstR = -1;
+					if (okR)
+						for (int c = 0; c < NCELLS; c++)
+							if (errR[c] > baseR[c] + 5 && errR[c] > 7)
+							{
+								bad++;
+								if (worstR < 0 || errR[c] - baseR[c] > errR[worstR] - baseR[worstR]) worstR = c;
+							}
+					if (bad && !(lastWorstR[p] == worstR && since_start() - lastTimeR[p] < 20.0))
+					{
+						lastWorstR[p] = worstR;
+						lastTimeR[p] = since_start();
+						g_rightAnom++;
+						printf("SLOTCHECK RIGHT ANOMALY at t=%.1f s: frame %u in slot %d (right of pair %d): %d of %d cells are far off; worst cell x %d..%d y %d..%d of the slot: error %.0f, usually %.0f\n", since_start(), c2, p * 2 + 1, p, bad, NCELLS,
+						       (worstR % NCX) * CELL_W, (worstR % NCX) * CELL_W + CELL_W - 1, (worstR / NCX) * CELL_H, (worstR / NCX) * CELL_H + CELL_H - 1, errR[worstR], baseR[worstR]);
+						if (g_rightAnom <= 10)
+							save_dump(p * 2 + 1, c2, wR2.data());
+						fflush(stdout);
+					}
+				}
+				if (!bad)
+					for (int c = 0; c < NCELLS; c++)
+						baseR[c] = baseR[c] * 0.97f + errR[c] * 0.03f;
+				g_tp = g_taps.data();
+			}
 		}
 		scans++;
 		if (now_us() - lastStatus > 10000000ull)
@@ -520,7 +623,7 @@ void *reader_main(void *)
 				if (!p95 && acc * 100 >= total * 95) p95 = i * 2;
 				if (!p99 && acc * 100 >= total * 99) p99 = i * 2;
 			}
-			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d; %ld scans, %ld calibrations (%.0f ms each), a slot read takes %.1f ms and its checks %.1f ms; anomalies by whole-ring search: %ld other-frame (offsets -4..+4: %ld %ld %ld %ld . %ld %ld %ld %ld, farther %ld), %ld NO frame matches (%ld of them repeats of known still-picture mismatches), %ld false alarms\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99, scans, calibrations, calibrations ? calMs / calibrations : 0.0, reads ? readMs / reads : 0.0, st.checks ? evalMs / st.checks : 0.0, g_cls[1], g_deltaHist[0], g_deltaHist[1], g_deltaHist[2], g_deltaHist[3], g_deltaHist[5], g_deltaHist[6], g_deltaHist[7], g_deltaHist[8], g_deltaOut, g_cls[2], g_known, g_cls[0]);
+			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d; %ld scans, %ld calibrations (%.0f ms each), a slot read takes %.1f ms and its checks %.1f ms; anomalies by whole-ring search: %ld other-frame (offsets -4..+4: %ld %ld %ld %ld . %ld %ld %ld %ld, farther %ld), %ld NO frame matches (%ld of them repeats of known still-picture mismatches), %ld false alarms; right slots: %ld checks, %ld anomalies\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99, scans, calibrations, calibrations ? calMs / calibrations : 0.0, reads ? readMs / reads : 0.0, st.checks ? evalMs / st.checks : 0.0, g_cls[1], g_deltaHist[0], g_deltaHist[1], g_deltaHist[2], g_deltaHist[3], g_deltaHist[5], g_deltaHist[6], g_deltaHist[7], g_deltaHist[8], g_deltaOut, g_cls[2], g_known, g_cls[0], g_rightChecks, g_rightAnom);
 			fflush(stdout);
 		}
 		usleep(40000);
@@ -630,21 +733,30 @@ void slotcheck_after_present(const uint16_t *canvas, int w, int h)
 		return;
 	/* the emulator's stand-in for the driver: renders the model into the ring, with a displaced block now and then */
 	static uint32_t count = 0;
-	static std::vector<uint16_t> tmp((size_t)SLOT_W * SLOT_H);
+	static std::vector<uint16_t> tmp((size_t)SLOT_W * SLOT_H), tmpR((size_t)SLOT_W * SLOT_H);
 	int pair = count % PAIRS;
 	uint8_t *base = g_fakeMap;
 	for (int y = 0; y < SLOT_H; y++)
 		for (int x = 0; x < SLOT_W; x++)
 		{
-			float m[3];
+			float m[3], mr[3];
 			model_pixel(canvas, (float)x, (float)y, m);   /* exactly the model: the fake driver is perfect */
+			model_pixel(canvas, (float)x, (float)y, mr, 1.5f);
 			tmp[(size_t)y * SLOT_W + x] = (uint16_t)((((int)(m[0] / 8)) << 11) | (((int)(m[1] / 4)) << 5) | ((int)(m[2] / 8)));
+			tmpR[(size_t)y * SLOT_W + x] = (uint16_t)((((int)(mr[0] / 8)) << 11) | (((int)(mr[1] / 4)) << 5) | ((int)(mr[2] / 8)));
 		}
-	if (++count % 150 == 0)   /* the glitch: a tower-sized block copied somewhere else (in the picture, before it is "written") */
+	++count;
+	if (count % 150 == 0)   /* the glitch: a tower-sized block copied somewhere else (in the picture, before it is "written") */
 		for (int y = 0; y < 40; y++)
 			memcpy(&tmp[(size_t)(100 + y) * SLOT_W + 420], &tmp[(size_t)(20 + y) * SLOT_W + 60], 100 * 2);
+	if (count % 150 == 75)   /* the same, in a right slot only */
+		for (int y = 0; y < 40; y++)
+			memcpy(&tmpR[(size_t)(100 + y) * SLOT_W + 420], &tmpR[(size_t)(20 + y) * SLOT_W + 60], 100 * 2);
 	for (int y = 0; y < SLOT_H; y++)   /* written in one go, as the real engine does */
+	{
 		memcpy(base + (size_t)(pair * SLOT_H + y) * g_line, &tmp[(size_t)y * SLOT_W], (size_t)SLOT_W * 2);
+		memcpy(base + (size_t)(pair * SLOT_H + y) * g_line + (size_t)SLOT_W * 2, &tmpR[(size_t)y * SLOT_W], (size_t)SLOT_W * 2);
+	}
 }
 
 
