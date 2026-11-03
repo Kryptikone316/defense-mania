@@ -1,4 +1,5 @@
 #include "gfx.hpp"
+#include "slotcheck.hpp"
 #include "hwdisp.hpp"
 #include "joykey.hpp"
 #include "tfenv.h"
@@ -234,6 +235,7 @@ void gfx_present()
 {
 	static int frame;
 	check_canvas();
+	slotcheck_frame(fb, SW, SH);   /* only when slot_check is on */
 	if (hwdisp_active())
 	{
 		static int stretch = -1;
@@ -263,6 +265,7 @@ void gfx_present()
 	}
 	else
 		dump_frame(frame);
+	slotcheck_after_present(fb, SW, SH);
 	frame++;
 	if (fbCount > 1)   /* the next frame goes into another buffer */
 	{

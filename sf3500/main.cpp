@@ -3,6 +3,7 @@
 #include "game.hpp"
 #include "hwdisp.hpp"
 #include "joykey.hpp"
+#include "slotcheck.hpp"
 
 #include <SDL.h>
 #include <sys/stat.h>
@@ -1089,6 +1090,7 @@ int main()
 	crash_report_install();
 	if (!gfx_init())
 		return 1;
+	slotcheck_start();   /* does nothing unless slot_check = 1 in defensemania.cfg */
 	if (getenv("DM_DISPTEST"))   /* the display test of DefensemaniaDbg: no game, only frames sent to the driver and read back */
 	{
 		int rc = disptest_run();
@@ -1351,6 +1353,7 @@ int main()
 			SDL_Delay(25 - spent);
 	}
 	delete play.map;
+	slotcheck_stop();
 	save_settings();
 	audio_shutdown();
 	hwdisp_deinit();

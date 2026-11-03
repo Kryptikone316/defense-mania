@@ -1,0 +1,508 @@
+/* In-game check of what the display driver makes of our frames.
+ *
+ * What the display test found out about the driver (DefensemaniaDisp, section 22-25 of the handoff): every frame sent to
+ * video_driver_disp_frame is copied into a queue and rendered by the graphics engine into a ring of 18 frame pairs in
+ * /dev/fb0 (slot 2k = left, 640 x 240, the frame rotated a quarter turn clockwise and squeezed; slot 2k+1 = the same frame
+ * through a second stage). The left slot is a plain rotate-and-scale of the canvas, so for any frame we sent we can
+ * predict what it should look like. This module keeps a copy of the last 40 frames, and a low-priority thread looks at the
+ * left slots about ten times a second: it finds which frame a slot should hold, predicts its picture (colour averages of
+ * 32 x 24 pixel cells at a sparse set of sample points, so texture detail does not matter) and compares. A cell whose
+ * error jumps far above its own usual level (a tower that is missing, or a copy of it somewhere else) is looked at again
+ * a few milliseconds later and, if it is still wrong, reported in log.txt as SLOTCHECK ANOMALY with the slot and the
+ * frame saved to files for a look. Nothing is touched when slot_check is off (the default). */
+#include "slotcheck.hpp"
+#include "gfx.hpp"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/fb.h>
+#include <math.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <time.h>
+#include <unistd.h>
+#include <vector>
+
+namespace {
+
+const int SLOT_W = 640, SLOT_H = 240, PAIRS = 18;
+const int ROW_STEP = 3, WORD_STEP = 7, WORDS_PER_ROW = 320;
+const int SAMPLE_ROWS = SLOT_H / ROW_STEP;                           /* 80 */
+const int SAMPLE_COLS = (WORDS_PER_ROW + WORD_STEP - 1) / WORD_STEP;   /* 46 */
+const int SAMPLES = SAMPLE_ROWS * SAMPLE_COLS;
+const int CELL_W = 32, CELL_H = 24, NCX = SLOT_W / CELL_W, NCY = SLOT_H / CELL_H, NCELLS = NCX * NCY;
+const int RING = 40;
+uint64_t g_minAge = 100000;
+useconds_t g_rereadUs = 15000;   /* how long to wait before looking at a doubtful slot again */   /* a frame is looked for in its slot only after the driver had time to render it (the emulator's fake is slow) */
+
+struct FrameRec
+{
+	uint16_t *px = NULL;
+	uint32_t n = 0;
+	uint64_t t = 0;
+};
+
+FrameRec g_fr[RING];
+volatile uint32_t g_sent = 0;
+int g_W = 0, g_H = 0;
+bool g_on = false, g_fake = false;
+uint8_t *g_fakeMap = NULL;
+const uint8_t *g_map = NULL;
+size_t g_len = 0, g_line = 2560;
+pthread_t g_th;
+bool g_threadOn = false;
+volatile bool g_stop = false;
+
+uint64_t now_us()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000ull + ts.tv_nsec / 1000;
+}
+
+inline void px565(uint16_t v, float &r, float &g, float &b)
+{
+	r = ((v >> 11) & 31) * (255.0f / 31);
+	g = ((v >> 5) & 63) * (255.0f / 63);
+	b = (v & 31) * (255.0f / 31);
+}
+
+/* the driver's rotate-and-scale as measured on the device: a quarter turn clockwise, 640 x 358 -> 640 x 240, bilinear,
+ * one pixel off in x */
+void model_pixel(const uint16_t *c, float xs, float ys, float out[3])
+{
+	float xc = (ys + 0.5f) * g_W / (float)SLOT_H - 0.5f;
+	float yc = (g_H - 1) - ((xs + 1 + 0.5f) * g_H / (float)SLOT_W - 0.5f);
+	if (xc < 0) xc = 0;
+	if (yc < 0) yc = 0;
+	if (xc > g_W - 1) xc = (float)(g_W - 1);
+	if (yc > g_H - 1) yc = (float)(g_H - 1);
+	int x0 = (int)xc, y0 = (int)yc, x1 = x0 + 1 < g_W ? x0 + 1 : x0, y1 = y0 + 1 < g_H ? y0 + 1 : y0;
+	float fx = xc - x0, fy = yc - y0;
+	float r00, g00, b00, r10, g10, b10, r01, g01, b01, r11, g11, b11;
+	px565(c[(size_t)y0 * g_W + x0], r00, g00, b00);
+	px565(c[(size_t)y0 * g_W + x1], r10, g10, b10);
+	px565(c[(size_t)y1 * g_W + x0], r01, g01, b01);
+	px565(c[(size_t)y1 * g_W + x1], r11, g11, b11);
+	float w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+	out[0] = r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11;
+	out[1] = g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11;
+	out[2] = b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11;
+}
+
+/* reads the sample words of a left slot */
+void read_slot(int slot, uint32_t *w)
+{
+	int x0 = (slot % 2) * SLOT_W, y0 = (slot / 2) * SLOT_H;
+	size_t n = 0;
+	for (int r = 0; r < SAMPLE_ROWS; r++)
+	{
+		const uint32_t *row = (const uint32_t *)(g_map + (size_t)(y0 + r * ROW_STEP) * g_line + (size_t)x0 * 2);
+		for (int k = 0; k < SAMPLE_COLS; k++)
+			w[n++] = row[k * WORD_STEP];
+	}
+}
+
+/* cell errors of a slot's samples against the model of a frame; returns the mean cell error */
+float eval_slot(const uint32_t *w, const uint16_t *canvas, float cellErr[NCELLS])
+{
+	float sumS[NCELLS][3], sumM[NCELLS][3];
+	int cnt[NCELLS];
+	memset(sumS, 0, sizeof sumS);
+	memset(sumM, 0, sizeof sumM);
+	memset(cnt, 0, sizeof cnt);
+	for (int r = 0; r < SAMPLE_ROWS; r++)
+	{
+		int ys = r * ROW_STEP, cy = ys / CELL_H;
+		if (cy >= NCY) cy = NCY - 1;
+		for (int k = 0; k < SAMPLE_COLS; k++)
+		{
+			uint32_t word = w[r * SAMPLE_COLS + k];
+			for (int sub = 0; sub < 2; sub++)
+			{
+				int xs = k * WORD_STEP * 2 + sub, cx = xs / CELL_W;
+				if (cx >= NCX) cx = NCX - 1;
+				int c = cy * NCX + cx;
+				float sr, sg, sb, m[3];
+				px565((uint16_t)(word >> (16 * sub)), sr, sg, sb);
+				model_pixel(canvas, (float)xs, (float)ys, m);
+				sumS[c][0] += sr; sumS[c][1] += sg; sumS[c][2] += sb;
+				sumM[c][0] += m[0]; sumM[c][1] += m[1]; sumM[c][2] += m[2];
+				cnt[c]++;
+			}
+		}
+	}
+	float total = 0;
+	for (int c = 0; c < NCELLS; c++)
+	{
+		if (!cnt[c]) { cellErr[c] = 0; continue; }
+		cellErr[c] = (fabsf(sumS[c][0] - sumM[c][0]) + fabsf(sumS[c][1] - sumM[c][1]) + fabsf(sumS[c][2] - sumM[c][2])) / (3.0f * cnt[c]);
+		total += cellErr[c];
+	}
+	return total / NCELLS;
+}
+
+const FrameRec *frame_at(uint32_t n)
+{
+	if (g_sent == 0 || n >= g_sent || g_sent - n >= (uint32_t)RING - 2)
+		return NULL;
+	const FrameRec &f = g_fr[n % RING];
+	return f.n == n ? &f : NULL;
+}
+
+int g_dumps = 0;
+
+void save_dump(int slot, uint32_t frame, const uint32_t *words)
+{
+	(void)words;
+	if (g_dumps >= 6)
+		return;
+	const FrameRec *f = frame_at(frame);
+	if (!f)
+		return;
+	char name[96];
+	snprintf(name, sizeof name, "slotcheck_%d_slot.raw", g_dumps);
+	FILE *o = fopen(name, "wb");
+	if (o)
+	{
+		int x0 = (slot % 2) * SLOT_W, y0 = (slot / 2) * SLOT_H;
+		for (int r = 0; r < SLOT_H; r++)
+			fwrite(g_map + (size_t)(y0 + r) * g_line + (size_t)x0 * 2, 1, (size_t)SLOT_W * 2, o);
+		fclose(o);
+	}
+	snprintf(name, sizeof name, "slotcheck_%d_canvas.raw", g_dumps);
+	o = fopen(name, "wb");
+	if (o)
+	{
+		fwrite(f->px, 1, (size_t)g_W * g_H * 2, o);
+		fclose(o);
+	}
+	printf("SLOTCHECK   saved slotcheck_%d_slot.raw (640 x 240, 16 bit, the driver's picture) and slotcheck_%d_canvas.raw (%d x %d, what we sent)\n", g_dumps, g_dumps, g_W, g_H);
+	g_dumps++;
+}
+
+struct Stats
+{
+	long checks = 0, unmatched = 0, anomalies = 0, rereads = 0, pending = 0;
+	long hist[51] = {};   /* cell errors in steps of 2 */
+};
+
+int calibrate(float cellErr[NCELLS])
+{
+	uint32_t n = g_sent;
+	uint64_t now = now_us();
+	float best = 1e30f, second = 1e30f;
+	int bestOff = 0;
+	std::vector<uint32_t> w(SAMPLES);
+	for (int off = 0; off < PAIRS; off++)
+	{
+		float sum = 0;
+		int used = 0;
+		for (int back = 4; back < 30 && used < 6; back += 3)
+		{
+			if (n < (uint32_t)back + 1) break;
+			const FrameRec *f = frame_at(n - 1 - back);
+			if (!f || f->t + g_minAge > now) continue;
+			read_slot(((f->n + off) % PAIRS) * 2, w.data());
+			sum += eval_slot(w.data(), f->px, cellErr);
+			used++;
+		}
+		if (!used) return -1;
+		sum /= used;
+		if (sum < best) { second = best; best = sum; bestOff = off; }
+		else if (sum < second) second = sum;
+	}
+	printf("SLOTCHECK ring offset %d (error %.1f, next best %.1f)\n", bestOff, best, second);
+	fflush(stdout);
+	return bestOff;
+}
+
+void *reader_main(void *)
+{
+	setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
+	std::vector<uint32_t> w(SAMPLES), w2(SAMPLES);
+	float errA[NCELLS], errB[NCELLS], err2[NCELLS];
+	float base[NCELLS];
+	bool haveBase = false;
+	int off = -1;
+	uint64_t lastCal = 0, lastStatus = now_us();
+	uint32_t lastRep[PAIRS];
+	memset(lastRep, 0xFF, sizeof lastRep);
+	Stats st;
+	int unmatchedRun = 0;
+	while (!g_stop)
+	{
+		uint32_t n = g_sent;
+		uint64_t now = now_us();
+		if (n < 60)
+		{
+			usleep(100000);
+			continue;
+		}
+		if (!g_fake && (off < 0 || now - lastCal > 30000000ull || unmatchedRun > 20))
+		{
+			int o = calibrate(errA);
+			if (o >= 0) off = o;
+			lastCal = now;
+			unmatchedRun = 0;
+			if (off < 0) { usleep(200000); continue; }
+		}
+		if (g_fake && off < 0)
+			off = 0;
+		for (int p = 0; p < PAIRS && !g_stop; p++)
+		{
+			n = g_sent;   /* a scan takes a while: frames keep coming, and slots get rewritten under it */
+			now = now_us();
+			/* the newest frame that belongs in this slot and is old enough to have been rendered */
+			uint32_t f = 0;
+			bool found = false;
+			for (uint32_t k = 1; k < (uint32_t)RING - 4 && k <= n; k++)
+			{
+				uint32_t cand = n - k;
+				const FrameRec *fr = frame_at(cand);
+				if (!fr || (cand + off) % PAIRS != (uint32_t)p)
+					continue;
+				if (fr->t + g_minAge > now)
+					continue;
+				f = cand;
+				found = true;
+				break;
+			}
+			if (!found)
+				continue;
+			read_slot(p * 2, w.data());
+			const FrameRec *fa = frame_at(f);
+			const FrameRec *fb = frame_at(f + PAIRS);   /* the slot may already hold the next frame of its turn */
+			const FrameRec *fo = f >= (uint32_t)PAIRS ? frame_at(f - PAIRS) : NULL;   /* or still the previous one, if the driver is late */
+			if (!fa)
+				continue;
+			float ma = eval_slot(w.data(), fa->px, errA), mb = 1e30f, mo = 1e30f;
+			uint32_t chosen = f;
+			float *err = errA;
+			float mean = ma;
+			if (fb)
+			{
+				mb = eval_slot(w.data(), fb->px, errB);
+				if (mb < ma) { chosen = f + PAIRS; err = errB; mean = mb; }
+			}
+			if (fo && ma > 6)
+			{
+				mo = eval_slot(w.data(), fo->px, err2);
+				if (mo < mean)
+				{
+					st.pending++;   /* not rendered yet: the slot still shows the frame of its previous turn */
+					continue;
+				}
+			}
+			st.checks++;
+			if (mean > 30)
+			{
+				st.unmatched++;
+				unmatchedRun++;
+				continue;
+			}
+			unmatchedRun = 0;
+			for (int c = 0; c < NCELLS; c++)
+			{
+				int hb = (int)(err[c] / 2);
+				st.hist[hb > 50 ? 50 : hb]++;
+			}
+			if (!haveBase)
+			{
+				memcpy(base, err, sizeof base);
+				haveBase = true;
+				continue;
+			}
+			int flagged = 0;
+			for (int c = 0; c < NCELLS; c++)
+				if (err[c] > base[c] + 22 && err[c] > 30)
+					flagged++;
+			if (flagged)
+			{
+				/* a write in progress, or real? look again */
+				usleep(g_rereadUs);
+				read_slot(p * 2, w2.data());
+				const FrameRec *fc = frame_at(chosen);
+				st.rereads++;
+				if (fc)
+				{
+					eval_slot(w2.data(), fc->px, err2);
+					int still = 0, worst = -1;
+					for (int c = 0; c < NCELLS; c++)
+						if (err2[c] > base[c] + 22 && err2[c] > 30)
+						{
+							still++;
+							if (worst < 0 || err2[c] - base[c] > err2[worst] - base[worst]) worst = c;
+						}
+					if (still && lastRep[p] != chosen)
+					{
+						lastRep[p] = chosen;
+						st.anomalies++;
+						printf("SLOTCHECK ANOMALY: frame %u (sent %.0f ms ago) in slot %d: %d of %d cells are far off; worst cell x %d..%d y %d..%d of the slot: error %.0f, usually %.0f\n", chosen,
+						       (now_us() - fc->t) / 1000.0, p * 2, still, NCELLS, (worst % NCX) * CELL_W, (worst % NCX) * CELL_W + CELL_W - 1, (worst / NCX) * CELL_H, (worst / NCX) * CELL_H + CELL_H - 1, err2[worst], base[worst]);
+						for (int c = 0, shown = 0; c < NCELLS && shown < 4; c++)
+							if (err2[c] > base[c] + 22 && err2[c] > 30 && c != worst)
+							{
+								printf("SLOTCHECK   also cell x %d..%d y %d..%d: error %.0f, usually %.0f\n", (c % NCX) * CELL_W, (c % NCX) * CELL_W + CELL_W - 1, (c / NCX) * CELL_H, (c / NCX) * CELL_H + CELL_H - 1, err2[c], base[c]);
+								shown++;
+							}
+						save_dump(p * 2, chosen, w2.data());
+						fflush(stdout);
+					}
+					continue;   /* a flagged slot does not teach the baseline */
+				}
+			}
+			for (int c = 0; c < NCELLS; c++)
+				base[c] = base[c] * 0.97f + err[c] * 0.03f;
+		}
+		if (now_us() - lastStatus > 30000000ull)
+		{
+			lastStatus = now_us();
+			long total = 0, acc = 0;
+			for (int i = 0; i <= 50; i++) total += st.hist[i];
+			int p50 = 0, p95 = 0, p99 = 0;
+			for (int i = 0; i <= 50; i++)
+			{
+				acc += st.hist[i];
+				if (!p50 && acc * 100 >= total * 50) p50 = i * 2;
+				if (!p95 && acc * 100 >= total * 95) p95 = i * 2;
+				if (!p99 && acc * 100 >= total * 99) p99 = i * 2;
+			}
+			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99);
+			fflush(stdout);
+		}
+		usleep(40000);
+	}
+	return NULL;
+}
+
+}   // namespace
+
+bool slotcheck_start()
+{
+	if (cfg_num("slot_check", 0) == 0)
+		return false;
+	if (cfg_num("present_480", 0) != 0)
+	{
+		printf("SLOTCHECK is off: present_480 changes the frame the model expects\n");
+		return false;
+	}
+	if (getenv("DM_SLOTCHECK_FAKE"))
+	{
+		g_fake = true;
+		g_minAge = 2500000;
+		g_rereadUs = 120000;
+		g_fakeMap = (uint8_t *)calloc(1, g_line * 4320);
+		g_map = g_fakeMap;
+		g_len = g_line * 4320;
+		printf("SLOTCHECK using a FAKE frame buffer (self-check)\n");
+	}
+	else if (getenv("DM_SLOTCHECK_FILE"))
+	{
+		int fd = open(getenv("DM_SLOTCHECK_FILE"), O_RDONLY);
+		struct stat sb;
+		if (fd < 0 || fstat(fd, &sb) != 0)
+			return false;
+		void *m = mmap(NULL, (size_t)sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+		if (m == MAP_FAILED)
+			return false;
+		g_map = (const uint8_t *)m;
+		g_len = (size_t)sb.st_size;
+		printf("SLOTCHECK reading the saved frame buffer %s\n", getenv("DM_SLOTCHECK_FILE"));
+	}
+	else
+	{
+		int fd = open("/dev/fb0", O_RDWR);
+		if (fd < 0)
+			fd = open("/dev/fb0", O_RDONLY);
+		fb_var_screeninfo v;
+		fb_fix_screeninfo f;
+		if (fd < 0 || ioctl(fd, FBIOGET_VSCREENINFO, &v) || ioctl(fd, FBIOGET_FSCREENINFO, &f) || v.bits_per_pixel != 16 || f.smem_len < f.line_length * 4320u)
+		{
+			printf("SLOTCHECK is off: /dev/fb0 cannot be used (%s)\n", fd < 0 ? strerror(errno) : "not the layout the check expects");
+			if (fd >= 0) close(fd);
+			return false;
+		}
+		size_t len = f.smem_len > (16u << 20) ? (16u << 20) : f.smem_len;
+		void *m = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
+		if (m == MAP_FAILED)
+		{
+			printf("SLOTCHECK is off: cannot map /dev/fb0 (%s)\n", strerror(errno));
+			close(fd);
+			return false;
+		}
+		g_map = (const uint8_t *)m;
+		g_len = len;
+		g_line = f.line_length;
+	}
+	g_W = SW;
+	g_H = SH;
+	for (int i = 0; i < RING; i++)
+	{
+		g_fr[i].px = (uint16_t *)malloc((size_t)g_W * g_H * 2);
+		if (!g_fr[i].px)
+		{
+			printf("SLOTCHECK is off: no memory for the frame copies\n");
+			return false;
+		}
+	}
+	g_on = true;
+	g_stop = false;
+	g_threadOn = pthread_create(&g_th, NULL, reader_main, NULL) == 0;
+	printf("SLOTCHECK started: the last %d frames are kept and the driver's left slots are checked about ten times a second\n", RING);
+	fflush(stdout);
+	return g_threadOn;
+}
+
+void slotcheck_frame(const uint16_t *canvas, int w, int h)
+{
+	if (!g_on || w != g_W || h != g_H)
+		return;
+	uint32_t n = g_sent;
+	FrameRec &r = g_fr[n % RING];
+	memcpy(r.px, canvas, (size_t)w * h * 2);
+	r.n = n;
+	r.t = now_us();
+	__sync_synchronize();
+	g_sent = n + 1;
+}
+
+void slotcheck_after_present(const uint16_t *canvas, int w, int h)
+{
+	if (!g_on || !g_fake || w != g_W || h != g_H)
+		return;
+	/* the emulator's stand-in for the driver: renders the model into the ring, with a displaced block now and then */
+	static uint32_t count = 0;
+	static std::vector<uint16_t> tmp((size_t)SLOT_W * SLOT_H);
+	int pair = count % PAIRS;
+	uint8_t *base = g_fakeMap;
+	for (int y = 0; y < SLOT_H; y++)
+		for (int x = 0; x < SLOT_W; x++)
+		{
+			float m[3];
+			model_pixel(canvas, (float)x, (float)y, m);   /* exactly the model: the fake driver is perfect */
+			tmp[(size_t)y * SLOT_W + x] = (uint16_t)((((int)(m[0] / 8)) << 11) | (((int)(m[1] / 4)) << 5) | ((int)(m[2] / 8)));
+		}
+	if (++count % 150 == 0)   /* the glitch: a tower-sized block copied somewhere else (in the picture, before it is "written") */
+		for (int y = 0; y < 40; y++)
+			memcpy(&tmp[(size_t)(100 + y) * SLOT_W + 420], &tmp[(size_t)(20 + y) * SLOT_W + 60], 100 * 2);
+	for (int y = 0; y < SLOT_H; y++)   /* written in one go, as the real engine does */
+		memcpy(base + (size_t)(pair * SLOT_H + y) * g_line, &tmp[(size_t)y * SLOT_W], (size_t)SLOT_W * 2);
+}
+
+void slotcheck_stop()
+{
+	if (!g_on)
+		return;
+	g_stop = true;
+	if (g_threadOn)
+		pthread_join(g_th, NULL);
+	g_on = false;
+}
