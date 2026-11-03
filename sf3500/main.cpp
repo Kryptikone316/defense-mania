@@ -856,6 +856,24 @@ static void drop_menu_if_tower_gone(Play &p)
 	p.menuKind = 0;
 }
 
+/* moves the cursor with the D-pad, faster the longer it is held; near the screen edge the map scrolls */
+static void move_cursor(Play &p, float dx, float dy, float dtMs)
+{
+	Map *m = p.map;
+	p.holdMs += dtMs;
+	float speed = 110 + (p.holdMs > 1100 ? 1100 : p.holdMs) * 0.32f;
+	float step = speed * dtMs / 1000.0f;
+	float nx = p.cx + dx * step, ny = p.cy + dy * step;
+	const float margin = 34;
+	if (nx < margin) { camX += (int)floorf(nx - margin); nx = margin; }
+	if (nx > SW - margin) { camX += (int)ceilf(nx - (SW - margin)); nx = SW - margin; }
+	if (ny < margin) { camY += (int)floorf(ny - margin); ny = margin; }
+	if (ny > SH - margin) { camY += (int)ceilf(ny - (SH - margin)); ny = SH - margin; }
+	p.cx = nx;
+	p.cy = ny;
+	camera_limits(m);
+}
+
 static void play_input(Play &p, float dtMs)
 {
 	Map *m = p.map;
@@ -935,20 +953,7 @@ static void play_input(Play &p, float dtMs)
 	if (held(JK_UP)) dy -= 1;
 	if (held(JK_DOWN)) dy += 1;
 	if (dx || dy)
-	{
-		p.holdMs += dtMs;
-		float speed = 110 + (p.holdMs > 1100 ? 1100 : p.holdMs) * 0.32f;
-		float step = speed * dtMs / 1000.0f;
-		float nx = p.cx + dx * step, ny = p.cy + dy * step;
-		const float margin = 34;
-		if (nx < margin) { camX += (int)floorf(nx - margin); nx = margin; }
-		if (nx > SW - margin) { camX += (int)ceilf(nx - (SW - margin)); nx = SW - margin; }
-		if (ny < margin) { camY += (int)floorf(ny - margin); ny = margin; }
-		if (ny > SH - margin) { camY += (int)ceilf(ny - (SH - margin)); ny = SH - margin; }
-		p.cx = nx;
-		p.cy = ny;
-		camera_limits(m);
-	}
+		move_cursor(p, dx, dy, dtMs);
 	else
 		p.holdMs = 0;
 	if (pressed(JK_A) && !m->defeated)
@@ -1211,6 +1216,24 @@ int main()
 					m->towers[next() % m->towers.size()]->repair();
 				if (n % 300 == 0 && m->towers.size() > 6)
 					m->sellTower(m->towers[next() % m->towers.size()]);
+				if (!getenv("DM_AUTOPAN"))   /* wander over the map like a player does, and open and close tower menus */
+				{
+					static int dirFrames;
+					static float adx, ady;
+					if (--dirFrames <= 0)
+					{
+						int r = next() % 9;
+						adx = (float)(r % 3 - 1);
+						ady = (float)(r / 3 - 1);
+						dirFrames = 20 + next() % 120;
+					}
+					if (play.menuKind == 0 && (adx || ady))
+						move_cursor(play, adx, ady, dt);
+					if (n % 120 == 0 && play.menuKind == 0 && !m->towers.empty())
+						open_tower_menu(play, next() % (int)m->towers.size());
+					else if (n % 120 == 45 && play.menuKind)
+						close_menu(play);
+				}
 			}
 			drop_menu_if_tower_gone(play);
 			play_input(play, dt);
