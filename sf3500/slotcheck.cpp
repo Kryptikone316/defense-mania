@@ -76,11 +76,12 @@ inline void px565(uint16_t v, float &r, float &g, float &b)
 }
 
 /* the driver's rotate-and-scale as measured on the device: a quarter turn clockwise, 640 x 358 -> 640 x 240, bilinear,
- * one pixel off in x */
+ * (measured exactly from the device: slot (xs, ys) reads canvas (ys * 640 / 240, 357 - xs * 358 / 640); the right slot of a pair is the same
+ * picture half a slot pixel further along) */
 void model_pixel(const uint16_t *c, float xs, float ys, float out[3])
 {
-	float xc = (ys + 0.5f) * g_W / (float)SLOT_H - 0.5f;
-	float yc = (g_H - 1) - ((xs + 1 + 0.5f) * g_H / (float)SLOT_W - 0.5f);
+	float xc = ys * g_W / (float)SLOT_H;
+	float yc = (g_H - 1) - xs * g_H / (float)SLOT_W;
 	if (xc < 0) xc = 0;
 	if (yc < 0) yc = 0;
 	if (xc > g_W - 1) xc = (float)(g_W - 1);
@@ -135,8 +136,8 @@ void build_tables()
 			for (int sub = 0; sub < 2; sub++, t++)
 			{
 				int xs = k * WORD_STEP * 2 + sub, ys = r * ROW_STEP;
-				float xc = (ys + 0.5f) * g_W / (float)SLOT_H - 0.5f;
-				float yc = (g_H - 1) - ((xs + 1 + 0.5f) * g_H / (float)SLOT_W - 0.5f);
+				float xc = ys * g_W / (float)SLOT_H;
+				float yc = (g_H - 1) - xs * g_H / (float)SLOT_W;
 				if (xc < 0) xc = 0;
 				if (yc < 0) yc = 0;
 				if (xc > g_W - 1) xc = (float)(g_W - 1);
@@ -361,7 +362,7 @@ void *reader_main(void *)
 			}
 			evalMs += (now_us() - te0) / 1000.0;
 			st.checks++;
-			if (mean > 30)
+			if (mean > 8)
 			{
 				st.unmatched++;
 				unmatchedRun++;
@@ -381,7 +382,7 @@ void *reader_main(void *)
 			}
 			int flagged = 0;
 			for (int c = 0; c < NCELLS; c++)
-				if (err[c] > base[c] + 22 && err[c] > 30)
+				if (err[c] > base[c] + 5 && err[c] > 7)
 					flagged++;
 			if (flagged)
 			{
@@ -415,7 +416,7 @@ void *reader_main(void *)
 				{
 					int still = 0, worst = -1;
 					for (int c = 0; c < NCELLS; c++)
-						if (err2[c] > base[c] + 22 && err2[c] > 30)
+						if (err2[c] > base[c] + 5 && err2[c] > 7)
 						{
 							still++;
 							if (worst < 0 || err2[c] - base[c] > err2[worst] - base[worst]) worst = c;
@@ -427,7 +428,7 @@ void *reader_main(void *)
 						printf("SLOTCHECK ANOMALY at t=%.1f s: frame %u (sent %.0f ms ago) in slot %d: %d of %d cells are far off; worst cell x %d..%d y %d..%d of the slot: error %.0f, usually %.0f\n", since_start(), chosen,
 						       (now_us() - fc->t) / 1000.0, p * 2, still, NCELLS, (worst % NCX) * CELL_W, (worst % NCX) * CELL_W + CELL_W - 1, (worst / NCX) * CELL_H, (worst / NCX) * CELL_H + CELL_H - 1, err2[worst], base[worst]);
 						for (int c = 0, shown = 0; c < NCELLS && shown < 4; c++)
-							if (err2[c] > base[c] + 22 && err2[c] > 30 && c != worst)
+							if (err2[c] > base[c] + 5 && err2[c] > 7 && c != worst)
 							{
 								printf("SLOTCHECK   also cell x %d..%d y %d..%d: error %.0f, usually %.0f\n", (c % NCX) * CELL_W, (c % NCX) * CELL_W + CELL_W - 1, (c / NCX) * CELL_H, (c / NCX) * CELL_H + CELL_H - 1, err2[c], base[c]);
 								shown++;
@@ -451,7 +452,7 @@ void *reader_main(void *)
 								float m = eval_slot(w2.data(), gf->px, errT);
 								int st2 = 0;
 								for (int c = 0; c < NCELLS; c++)
-									if (errT[c] > base[c] + 22 && errT[c] > 30) st2++;
+									if (errT[c] > base[c] + 5 && errT[c] > 7) st2++;
 								if (g == chosen) chM = m;
 								long dist = (long)g - (long)chosen;
 								if (dist < 0) dist = -dist;
@@ -482,9 +483,9 @@ void *reader_main(void *)
 								 * (sharp text, small sprites), not a glitch. Only something new is dumped. */
 								bool novel = false;
 								for (int c = 0; c < NCELLS; c++)
-									if (err2[c] > base[c] + 22 && err2[c] > 30)
+									if (err2[c] > base[c] + 5 && err2[c] > 7)
 									{
-										if (g_noCount[c] < 3 || err2[c] > g_noErr[c] + 25) novel = true;
+										if (g_noCount[c] < 3 || err2[c] > g_noErr[c] + 6) novel = true;
 										g_noCount[c]++;
 										g_noErr[c] = g_noCount[c] == 1 ? err2[c] : g_noErr[c] * 0.7f + err2[c] * 0.3f;
 									}

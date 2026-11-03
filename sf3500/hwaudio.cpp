@@ -29,6 +29,7 @@ static volatile int thread_running = 0;
 
 static volatile unsigned g_underrun_count = 0;
 static volatile unsigned g_dropped_frames = 0;
+static volatile unsigned g_resyncs = 0;
 
 static short g_last_l = 0, g_last_r = 0;
 static int   g_was_underrun = 0;
@@ -47,6 +48,17 @@ static void *audio_thread_fn(void *unused) {
         if (next_wake.tv_nsec >= 1000000000L) {
             next_wake.tv_nsec -= 1000000000L;
             next_wake.tv_sec += 1;
+        }
+        {
+            /* if this thread was held up (a long stall in the system), do not play the missed chunks back to back, which
+             * sounds like the music racing: start the timing again from now */
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long long late = (long long)(now.tv_sec - next_wake.tv_sec) * 1000000000LL + (now.tv_nsec - next_wake.tv_nsec);
+            if (late > 4 * period_ns) {
+                next_wake = now;
+                g_resyncs++;
+            }
         }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wake, NULL);
 
@@ -201,6 +213,7 @@ void hwaudio_deinit(void) {
     if (!g_active) return;
     thread_running = 0;
     pthread_join(audio_thread, NULL);
+    printf("hwaudio: %u underruns, %u timing restarts after a stall, %u frames dropped\n", g_underrun_count, g_resyncs, g_dropped_frames);
     if (p_deinit) p_deinit();
     if (g_handle) { dlclose(g_handle); g_handle = NULL; }
     p_init = NULL; p_play = NULL; p_deinit = NULL;
