@@ -1011,6 +1011,26 @@ static void play_draw(Play &p)
 		          SW / 2, SH - 84, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }
 
+/* ------------------------------------------------------------------ on-device test run (DefensemaniaDbg) */
+/* With DM_AUTOMAP set the game skips the menus, plays that map by itself (DM_AUTOPLAY builds and upgrades towers, at
+ * DM_AUTOSPEED times normal speed), prints a status line every 300 frames and a final "DBG RESULT" line, then exits.
+ * The run script of the debug launcher uses it for stress tests whose logs end up on the card. */
+static void proc_mem_kb(long &rss, long &peak)
+{
+	rss = peak = -1;
+	FILE *f = fopen("/proc/self/status", "r");
+	if (!f)
+		return;
+	char line[120];
+	while (fgets(line, sizeof line, f))
+	{
+		long v;
+		if (sscanf(line, "VmRSS: %ld", &v) == 1) rss = v;
+		else if (sscanf(line, "VmHWM: %ld", &v) == 1) peak = v;
+	}
+	fclose(f);
+}
+
 /* ------------------------------------------------------------------ crash report */
 /* A fatal signal writes where it happened to log.txt (stderr): the fault address, the program counter and return
  * address, the screen and map, and every word of the stack that looks like a code address, so the unstripped
@@ -1074,6 +1094,19 @@ int main()
 	music_play_folder("Conquest");
 
 	Screen screen = S_MAIN;
+	const bool autoRun = getenv("DM_AUTOMAP") != NULL;
+	int autoFrames = 0, autoLimit = getenv("DM_AUTOFRAMES") ? atoi(getenv("DM_AUTOFRAMES")) : 6000, autoMinFps = 999, autoStart = 0;
+	if (autoRun)
+	{
+		mapPicked = atoi(getenv("DM_AUTOMAP"));
+		if (mapPicked < 0 || mapPicked >= (int)maps.size()) mapPicked = 0;
+		difficulty = getenv("DM_AUTODIFF") ? atoi(getenv("DM_AUTODIFF")) : 1;
+		playEndless = getenv("DM_AUTOENDLESS") != NULL;
+		screen = S_LOADING;
+		printf("DBG START map %d (%s) difficulty %d seed %s frames %d speed %s\n", mapPicked, maps.empty() ? "?" : maps[mapPicked].name.c_str(), difficulty,
+		       getenv("DM_SEED") ? getenv("DM_SEED") : "default", autoLimit, getenv("DM_AUTOSPEED") ? getenv("DM_AUTOSPEED") : "4");
+		fflush(stdout);
+	}
 	int mainSel = 0, optSel = 0, afterSel = 0;
 	Result result;
 	Play play;
@@ -1156,12 +1189,12 @@ int main()
 				play.map->finished = true;
 				play.map->finishedWon = getenv("DM_FAKE_WIN") != NULL;
 			}
-			if (getenv("DM_AUTOPLAY"))   /* test hook: builds, upgrades, repairs and sells towers by itself, at speed */
+			if (getenv("DM_AUTOPLAY") || getenv("DM_AUTOMAP"))   /* test hook: builds, upgrades, repairs and sells towers by itself, at speed */
 			{
 				static unsigned rnd = getenv("DM_SEED") ? (unsigned)atoi(getenv("DM_SEED")) : 12345;
 				static int n;
 				auto next = [&]() { rnd = rnd * 1103515245u + 12345u; return (int)((rnd >> 8) & 0xFFFF); };
-				globalSpeed = 4.0f;
+				globalSpeed = getenv("DM_AUTOSPEED") ? (float)atof(getenv("DM_AUTOSPEED")) : 4.0f;
 				Map *m = play.map;
 				if (++n % 25 == 0 && !m->towerTypes.empty())
 				{
@@ -1183,6 +1216,53 @@ int main()
 			play_input(play, dt);
 			drop_menu_if_tower_gone(play);
 			play_draw(play);
+			if (autoRun)
+			{
+				if (!autoStart) autoStart = (int)millis();
+				autoFrames++;
+				if (fps > 0 && fps < autoMinFps && (int)millis() - autoStart > 8000) autoMinFps = fps;
+				Map *am = play.map;
+				static float abortMs;   /* Select+Start ends this run; held for 3 seconds it ends the whole plan too */
+				if (held(JK_START) && held(JK_SELECT)) abortMs += dt; else abortMs = 0;
+				if (abortMs > 0 && (abortMs > 3000 || autoFrames > 20) && (abortMs > 600))
+				{
+					if (abortMs > 3000)
+					{
+						FILE *sf = fopen("dbg/STOP", "w");
+						if (sf) { fputs("stop\n", sf); fclose(sf); }
+					}
+					printf("DBG RESULT frames %d  stopped with the pad%s\n", autoFrames, abortMs > 3000 ? " (plan stopped)" : "");
+					fflush(stdout);
+					screen = next = S_QUIT;
+					break;
+				}
+				if (autoFrames % 300 == 0)
+				{
+					long rss, peak;
+					proc_mem_kb(rss, peak);
+					printf("DBG frame %d  wave %d/%d  towers %d  money %d  lives %d  fps %d  rss %ld kB (peak %ld)\n", autoFrames, am->waves->current + 1, (int)am->waves->waves.size(),
+					       (int)am->towers.size(), am->money, am->lifes, fps, rss, peak);
+					fflush(stdout);
+				}
+				if (autoFrames >= autoLimit && !am->finished)
+				{
+					long rss, peak;
+					proc_mem_kb(rss, peak);
+					printf("DBG RESULT frames %d  ended by the frame limit  wave %d/%d  lives %d  min fps %d  rss %ld kB (peak %ld)\n", autoFrames, am->waves->current + 1, (int)am->waves->waves.size(), am->lifes, autoMinFps == 999 ? -1 : autoMinFps, rss, peak);
+					fflush(stdout);
+					screen = next = S_QUIT;
+					break;
+				}
+				if (am->finished)
+				{
+					long rss, peak;
+					proc_mem_kb(rss, peak);
+					printf("DBG RESULT frames %d  match %s  wave %d/%d  lives %d  min fps %d  rss %ld kB (peak %ld)\n", autoFrames, am->finishedWon ? "WON" : "LOST", am->wavesCleared, (int)am->waves->waves.size(), am->lifes, autoMinFps == 999 ? -1 : autoMinFps, rss, peak);
+					fflush(stdout);
+					screen = next = S_QUIT;
+					break;
+				}
+			}
 			if (play.map->finished)
 			{
 				afterSel = 0;
