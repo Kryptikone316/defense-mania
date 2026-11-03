@@ -480,6 +480,34 @@ void draw_image_scaled(const Image &img, int dx, int dy, int dw, int dh, int alp
 	}
 }
 
+/* The part of a sprite cell that is not see-through, found once per cell: the shots are tiny arrows in a 64x64 cell, and
+ * rotating the whole cell (with float maths and a floorf per pixel) cost about 6 ms per shot on the device. */
+struct OpaqueBox { const Image *img; int sx, sy, sw, sh, x0, y0, x1, y1; };
+static OpaqueBox g_boxes[24];
+static int g_boxNext;
+void gfx_reset_caches() { memset(g_boxes, 0, sizeof g_boxes); g_boxNext = 0; }   /* when the sprite sheets change (a new map) */
+
+static const OpaqueBox *opaque_box(const Image &img, int sx, int sy, int sw, int sh)
+{
+	for (int i = 0; i < 24; i++)
+		if (g_boxes[i].img == &img && g_boxes[i].sx == sx && g_boxes[i].sy == sy && g_boxes[i].sw == sw && g_boxes[i].sh == sh)
+			return &g_boxes[i];
+	OpaqueBox &o = g_boxes[g_boxNext];
+	g_boxNext = (g_boxNext + 1) % 24;
+	o.img = &img; o.sx = sx; o.sy = sy; o.sw = sw; o.sh = sh;
+	o.x0 = sw; o.y0 = sh; o.x1 = -1; o.y1 = -1;
+	for (int y = 0; y < sh; y++)
+		for (int x = 0; x < sw; x++)
+			if (img.px[(size_t)(sy + y) * img.w + sx + x] >> 24)
+			{
+				if (x < o.x0) o.x0 = x;
+				if (x > o.x1) o.x1 = x;
+				if (y < o.y0) o.y0 = y;
+				if (y > o.y1) o.y1 = y;
+			}
+	return &o;
+}
+
 void draw_image_rot(const Image &img, int sx, int sy, int sw, int sh, float cx, float cy, float angle, int alpha)
 {
 	if (!img.valid())
@@ -488,24 +516,27 @@ void draw_image_rot(const Image &img, int sx, int sy, int sw, int sh, float cx, 
 		return;   /* not a place to draw */
 	if (sw <= 0 || sh <= 0 || sx < 0 || sy < 0 || sx + sw > img.w || sy + sh > img.h)
 		return;   /* not a part of this image */
+	const OpaqueBox *ob = opaque_box(img, sx, sy, sw, sh);
+	if (ob->x1 < ob->x0)
+		return;   /* nothing to see in this cell */
 	float c = cosf(angle), s = sinf(angle);
-	float half = (sw > sh ? sw : sh) * 0.75f;
-	int x0 = (int)(cx - half), x1 = (int)(cx + half) + 1, y0 = (int)(cy - half), y1 = (int)(cy + half) + 1;
+	/* how far the visible part reaches from the cell's centre, whatever the angle */
+	float ex = fmaxf(fabsf(ob->x0 - sw * 0.5f), fabsf(ob->x1 + 1 - sw * 0.5f)), ey = fmaxf(fabsf(ob->y0 - sh * 0.5f), fabsf(ob->y1 + 1 - sh * 0.5f));
+	float half = sqrtf(ex * ex + ey * ey) + 1.5f;
+	int x0 = (int)(cx - half) - 1, x1 = (int)(cx + half) + 2, y0 = (int)(cy - half) - 1, y1 = (int)(cy + half) + 2;
 	if (x0 < 0) x0 = 0;
 	if (y0 < 0) y0 = 0;
 	if (x1 > SW) x1 = SW;
 	if (y1 > SH) y1 = SH;
+	const float halfW = sw / 2.0f, halfH = sh / 2.0f;
 	for (int y = y0; y < y1; y++)
 	{
-		if (y < 0 || y >= SH)
-			continue;
-		for (int x = x0; x < x1; x++)
+		float fx = x0 + 0.5f - cx, fy = y + 0.5f - cy;
+		float u = fx * c + fy * s + halfW, v = -fx * s + fy * c + halfH;   /* then one step per pixel, no multiplies */
+		uint16_t *row = &fb[(size_t)y * SW];
+		for (int x = x0; x < x1; x++, u += c, v -= s)
 		{
-			if (x < 0 || x >= SW)
-				continue;
-			float fx = x + 0.5f - cx, fy = y + 0.5f - cy;
-			float u = fx * c + fy * s + sw / 2.0f, v = -fx * s + fy * c + sh / 2.0f;
-			int iu = (int)floorf(u), iv = (int)floorf(v);
+			int iu = (int)(u + 4096.0f) - 4096, iv = (int)(v + 4096.0f) - 4096;   /* floor, for values above -4096 */
 			if (iu < 0 || iv < 0 || iu >= sw || iv >= sh)
 				continue;
 			uint32_t p = img.px[(size_t)(sy + iv) * img.w + sx + iu];
@@ -514,9 +545,9 @@ void draw_image_rot(const Image &img, int sx, int sy, int sw, int sh, float cx, 
 				continue;
 			int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
 			if (a >= 250)
-				fb[(size_t)y * SW + x] = pack565(r, g, b);
+				row[x] = pack565(r, g, b);
 			else
-				blend_px(&fb[(size_t)y * SW + x], r, g, b, a);
+				blend_px(&row[x], r, g, b, a);
 		}
 	}
 }
@@ -563,11 +594,12 @@ static void circle(float cx, float cy, float r, uint32_t rgb, int alpha, bool fi
 {
 	int rr = (int)(rgb >> 16 & 255), gg = (int)(rgb >> 8 & 255), bb = (int)(rgb & 255);
 	int x0 = (int)(cx - r - 1), x1 = (int)(cx + r + 2), y0 = (int)(cy - r - 1), y1 = (int)(cy + r + 2);
+	float rin = r > 0.8f ? (r - 0.8f) * (r - 0.8f) : 0, rout = (r + 0.8f) * (r + 0.8f), rsq = r * r;   /* squared, so no square root per pixel */
 	for (int y = y0 < 0 ? 0 : y0; y < (y1 > SH ? SH : y1); y++)
 		for (int x = x0 < 0 ? 0 : x0; x < (x1 > SW ? SW : x1); x++)
 		{
-			float dx = x + 0.5f - cx, dy = y + 0.5f - cy, d = sqrtf(dx * dx + dy * dy);
-			bool on = filled ? d <= r : fabsf(d - r) <= 0.8f;
+			float dx = x + 0.5f - cx, dy = y + 0.5f - cy, d2 = dx * dx + dy * dy;
+			bool on = filled ? d2 <= rsq : (d2 >= rin && d2 <= rout);
 			if (on)
 			{
 				if (alpha >= 250)

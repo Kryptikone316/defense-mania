@@ -752,6 +752,7 @@ Map *g_map = NULL;
 
 Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), difficulty(diff), charSets(mapPath)
 {
+	gfx_reset_caches();
 	endless = isEndless;
 	g_map = this;
 	size_t slash = mapPath.rfind('/');
@@ -876,6 +877,7 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 
 Map::~Map()
 {
+	gfx_reset_caches();
 	for (size_t i = 0; i < towers.size(); i++) delete towers[i];
 	delete waves;
 	if (g_map == this)

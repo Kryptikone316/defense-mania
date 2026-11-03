@@ -734,6 +734,7 @@ static void camera_limits(const Map *m)
 	if (camY < 0) camY = 0;
 	if (camX > maxX) camX = maxX;
 	if (camY > maxY) camY = maxY;
+	camX &= ~1;   /* an even column keeps the map copy word-aligned, which is much faster on this CPU */
 }
 
 static void radial_geometry(const Play &p, int count, int iconSize, float &x, float &y, float &radius, int tx, int ty)

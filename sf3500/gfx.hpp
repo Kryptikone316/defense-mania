@@ -29,6 +29,7 @@ void grade_rgb(uint8_t &r, uint8_t &g, uint8_t &b);   /* the brightness/contrast
 void grade_set_map(const char *mapName);       /* picks up map-specific overrides, e.g. woods_saturation */
 
 /* ---- images ---- */
+void gfx_reset_caches();   /* forget what was learned about the loaded sprite sheets */
 bool load_image(const std::string &path, Image &img, bool graded = true);
 /* Draws the part (sx,sy,sw,sh) of img with its top-left at (dx,dy). alpha 0..255; tint multiplies the colour. */
 void draw_image(const Image &img, int dx, int dy, int sx = 0, int sy = 0, int sw = -1, int sh = -1,
