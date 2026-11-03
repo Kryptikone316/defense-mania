@@ -1095,6 +1095,7 @@ int main()
 	optHQ = cfg_num("hq_graphics", 0) != 0;
 	audio_init();
 	load_settings();
+	if (getenv("DM_HQ")) optHQ = atoi(getenv("DM_HQ")) != 0;   /* test hook */
 	load_scores();
 	music_play_folder("Conquest");
 
@@ -1263,13 +1264,16 @@ int main()
 					screen = next = S_QUIT;
 					break;
 				}
+				static long sumMap, sumList, sumSprites, sumBars;
+				sumMap += g_prof[0]; sumList += g_prof[1]; sumSprites += g_prof[2]; sumBars += g_prof[3];
 				if (autoFrames % 300 == 0)
 				{
 					long rss, peak;
 					proc_mem_kb(rss, peak);
-					printf("DBG frame %d  wave %d/%d  towers %d  money %d  lives %d  fps %d  rss %ld kB (peak %ld)\n", autoFrames, am->waves->current + 1, (int)am->waves->waves.size(),
-					       (int)am->towers.size(), am->money, am->lifes, fps, rss, peak);
+					printf("DBG frame %d  wave %d/%d  towers %d  money %d  lives %d  fps %d  rss %ld kB (peak %ld)  avg ms per frame: map+areas %.1f, list %.1f, sprites %.1f, bars/shots %.1f%s%s\n", autoFrames, am->waves->current + 1, (int)am->waves->waves.size(),
+					       (int)am->towers.size(), am->money, am->lifes, fps, rss, peak, sumMap / 300.0, sumList / 300.0, sumSprites / 300.0, sumBars / 300.0, optHQ ? "  [HQ graphics]" : "", am->showBuildAreas ? "  [build areas]" : "");
 					fflush(stdout);
+					sumMap = sumList = sumSprites = sumBars = 0;
 				}
 				if (autoFrames >= autoLimit && !am->finished)
 				{

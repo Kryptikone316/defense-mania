@@ -946,19 +946,26 @@ void Map::display()
 {
 	uint32_t p0 = millis();
 	game_clock_advance();
-	blit565_window(mapImage, camX, camY);
 	if (showBuildAreas)
-		for (int i = 0; i < cols; i++)
-			for (int j = 0; j < rows; j++)
-			{
-				int k = tileType[(size_t)i * rows + j];
-				if (k != 1 && k != 3 && k != 4 && k != 5)
+	{
+		if (areasImage.px.empty())   /* once: a copy of the map with the build areas blended in, so showing them costs nothing per frame */
+		{
+			uint32_t t0 = millis();
+			areasImage = mapImage;
+			for (int i = 0; i < cols; i++)
+				for (int j = 0; j < rows; j++)
 				{
-					int x = i * tileSize - camX, y = j * tileSize - camY;
-					if (x + tileSize > 0 && y + tileSize > 0 && x < SW && y < SH)
-						fill_rect(x + 1, y + 1, tileSize - 2, tileSize - 2, 0x339933, 110);
+					int k = tileType[(size_t)i * rows + j];
+					if (k != 1 && k != 3 && k != 4 && k != 5)
+						tint565_rect(areasImage, i * tileSize + 1, j * tileSize + 1, tileSize - 2, tileSize - 2, 0x339933, 110);
 				}
-			}
+			printf("build areas baked into a copy of the map in %u ms\n", (unsigned)(millis() - t0));
+			fflush(stdout);
+		}
+		blit565_window(areasImage, camX, camY);
+	}
+	else
+		blit565_window(mapImage, camX, camY);
 	uint32_t p1 = millis();
 	/* towers and enemies, back to front */
 	std::vector<DrawItem> items;

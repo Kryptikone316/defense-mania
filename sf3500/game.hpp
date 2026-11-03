@@ -191,7 +191,7 @@ public:
 
 	std::string path, id;
 	int difficulty, tileSize, mapW, mapH, cols, rows, money, lifes;
-	Image565 mapImage;
+	Image565 mapImage, areasImage;   /* areasImage: the map with the build areas baked in, made the first time they are shown */
 	Image lightRay, hudTop, hudBottom, moneyImg, lifeImg, hudPause, hudPlay, hudBuild, hudMenu;
 	std::vector<int> tileType;   /* cols*rows */
 	CharSets charSets;

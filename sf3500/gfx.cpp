@@ -97,14 +97,21 @@ void grade_rgb(uint8_t &r, uint8_t &g, uint8_t &b)
 /* ------------------------------------------------------------------ canvas */
 static inline uint16_t pack565(int r, int g, int b) { return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); }
 
+/* Alpha blend in the canvas's own 16-bit format, all three colours at once and with no division (the CPU's divide is
+ * slow and half the frame time went into it): the 5-6-5 fields are spread apart so they can share one multiply. The
+ * alpha has 32 steps, which is not visible on screen. a 1..254 */
+static inline uint16_t blend565(uint16_t dst, uint16_t src, int a)
+{
+	uint32_t a5 = (uint32_t)(a + 4) >> 3;
+	uint32_t d = ((uint32_t)dst | ((uint32_t)dst << 16)) & 0x07E0F81Fu;
+	uint32_t sp = ((uint32_t)src | ((uint32_t)src << 16)) & 0x07E0F81Fu;
+	d = (((sp - d) * a5 >> 5) + d) & 0x07E0F81Fu;
+	return (uint16_t)(d | (d >> 16));
+}
+
 static inline void blend_px(uint16_t *d, int r, int g, int b, int a)   /* a 1..254 */
 {
-	int dv = *d;
-	int dr = (dv >> 11) << 3 | (dv >> 13), dg = ((dv >> 5) & 63) << 2 | ((dv >> 9) & 3), db = (dv & 31) << 3 | ((dv >> 2) & 7);
-	dr += ((r - dr) * a) / 255;
-	dg += ((g - dg) * a) / 255;
-	db += ((b - db) * a) / 255;
-	*d = pack565(dr, dg, db);
+	*d = blend565(*d, pack565(r, g, b), a);
 }
 
 void gfx_clear(uint8_t r, uint8_t g, uint8_t b)
@@ -330,6 +337,18 @@ bool load_image565(const std::string &path, Image565 &img)
 	return true;
 }
 
+/* tints a rectangle of an opaque canvas-format picture (used once to bake the build areas into a copy of the map) */
+void tint565_rect(Image565 &img, int x, int y, int w, int h, uint32_t rgb, int alpha)
+{
+	uint16_t c = pack565((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
+	for (int yy = y < 0 ? 0 : y; yy < y + h && yy < img.h; yy++)
+		for (int xx = x < 0 ? 0 : x; xx < x + w && xx < img.w; xx++)
+		{
+			uint16_t &p = img.px[(size_t)yy * img.w + xx];
+			p = blend565(p, c, alpha);
+		}
+}
+
 void blit565_window(const Image565 &img, int sx, int sy)
 {
 	for (int y = 0; y < SH; y++)
@@ -367,15 +386,15 @@ void draw_image(const Image &img, int dx, int dy, int sx, int sy, int sw, int sh
 			if (!a)
 				continue;
 			if (alpha != 255)
-				a = a * alpha / 255;
+				a = (a * (alpha + 1)) >> 8;
 			if (!a)
 				continue;
 			int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
 			if (tinted)
 			{
-				r = r * tr / 255;
-				g = g * tg / 255;
-				b = b * tb / 255;
+				r = (r * (tr + 1)) >> 8;
+				g = (g * (tg + 1)) >> 8;
+				b = (b * (tb + 1)) >> 8;
 			}
 			if (a >= 250)
 				dst[x] = pack565(r, g, b);
@@ -408,7 +427,7 @@ void draw_image_scaled(const Image &img, int dx, int dy, int dw, int dh, int alp
 			if (pxx < 0 || pxx >= SW)
 				continue;
 			uint32_t p = row[x * img.w / dw];
-			int a = (p >> 24) * alpha / 255;
+			int a = ((p >> 24) * (alpha + 1)) >> 8;
 			if (!a)
 				continue;
 			int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
@@ -449,7 +468,7 @@ void draw_image_rot(const Image &img, int sx, int sy, int sw, int sh, float cx, 
 			if (iu < 0 || iv < 0 || iu >= sw || iv >= sh)
 				continue;
 			uint32_t p = img.px[(size_t)(sy + iv) * img.w + sx + iu];
-			int a = (p >> 24) * alpha / 255;
+			int a = ((p >> 24) * (alpha + 1)) >> 8;
 			if (!a)
 				continue;
 			int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
