@@ -75,9 +75,12 @@ struct Fb
 	const uint8_t *map = NULL;
 	size_t len = 0;
 	bool ok = false;
+	int step = 7;       /* every step-th 32-bit word is sampled */
+	int index = 0;      /* /dev/fb<index> */
 };
 
-static Fb g_fb;
+static Fb g_fb;           /* the one being read back */
+static Fb g_cand[4];      /* every frame buffer that could be mapped */
 
 /* Self-check without a device (DM_DISPTEST_FAKEFB=1, for the emulator): a fake /dev/fb0 that is a copy of the last frame
  * sent, with a block of it displaced now and then, to prove that the read-back and the anomaly report work. */
@@ -117,12 +120,13 @@ static void fb_probe()
 		g_fb.fd = -1;
 		memset(&g_fb.v, 0, sizeof g_fb.v);
 		memset(&g_fb.f, 0, sizeof g_fb.f);
-		g_fb.v.xres = SW; g_fb.v.yres = SH; g_fb.v.bits_per_pixel = 16;
+		g_fb.v.xres = SW; g_fb.v.yres = SH; g_fb.v.yres_virtual = SH; g_fb.v.bits_per_pixel = 16;
 		g_fb.f.line_length = SW * 2;
 		g_fb.f.smem_len = sizeof g_fakeFb;
 		g_fb.map = g_fakeFb;
 		g_fb.len = sizeof g_fakeFb;
 		g_fb.ok = true;
+		g_cand[0] = g_fb;
 		printf("DISP using a FAKE frame buffer (self-check)\n");
 		return;
 	}
@@ -147,7 +151,7 @@ static void fb_probe()
 		if (!r1)
 			printf("DISP   res %ux%u virtual %ux%u offset %u,%u bpp %u rotate %u  line %u bytes  smem_len %u  type %u visual %u accel %u\n", v.xres, v.yres, v.xres_virtual, v.yres_virtual,
 			       v.xoffset, v.yoffset, v.bits_per_pixel, v.rotate, f.line_length, f.smem_len, f.type, f.visual, f.accel);
-		if (i == 0 && !r1 && !r2 && f.smem_len > 0)
+		if (!r1 && !r2 && f.smem_len > 0)
 		{
 			size_t len = f.smem_len > (16u << 20) ? (16u << 20) : f.smem_len;
 			void *m = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
@@ -155,13 +159,16 @@ static void fb_probe()
 				printf("DISP   mmap of %s failed (%s)\n", path, strerror(errno));
 			else
 			{
-				g_fb.fd = fd;
-				g_fb.v = v;
-				g_fb.f = f;
-				g_fb.map = (const uint8_t *)m;
-				g_fb.len = len;
-				g_fb.ok = true;
-				printf("DISP   mapped %zu bytes for reading\n", len);
+				Fb &c = g_cand[i];
+				c.fd = fd;
+				c.v = v;
+				c.f = f;
+				c.map = (const uint8_t *)m;
+				c.len = len;
+				c.ok = true;
+				c.index = i;
+				c.step = len > (4u << 20) ? 61 : 7;   /* the big canvas is sampled more sparsely */
+				printf("DISP   mapped %zu bytes of %s for reading (sampling every %d words)\n", len, path, c.step);
 				continue;   /* keep fd open */
 			}
 		}
@@ -171,7 +178,6 @@ static void fb_probe()
 }
 
 /* One sample set: every 7th 32-bit word of the visible page (the page the driver is showing right now). */
-static const int SAMPLE_STEP = 7;
 struct Samples
 {
 	std::vector<uint32_t> w;
@@ -181,23 +187,17 @@ struct Samples
 
 static void fb_read(Samples &s)
 {
-	fb_var_screeninfo v;
-	if (ioctl(g_fb.fd, FBIOGET_VSCREENINFO, &v) == 0)
-		g_fb.v = v;
-	size_t page = (size_t)g_fb.f.line_length * g_fb.v.yres;
-	size_t base = (size_t)g_fb.v.yoffset * g_fb.f.line_length;
-	if (base + page > g_fb.len)
-	{
-		base = 0;
-		if (page > g_fb.len)
-			page = g_fb.len;
-	}
+	/* the whole mapped frame (these frame buffers do not pan: the panel one is exactly one screen) */
+	size_t page = (size_t)g_fb.f.line_length * (g_fb.v.yres_virtual ? g_fb.v.yres_virtual : g_fb.v.yres);
+	if (page > g_fb.len || page == 0)
+		page = g_fb.len;
 	size_t words = page / 4;
-	s.yoff = g_fb.v.yoffset;
-	s.w.resize((words + SAMPLE_STEP - 1) / SAMPLE_STEP);
-	const uint32_t *p = (const uint32_t *)(g_fb.map + base);
+	int step = g_fb.step;
+	s.yoff = 0;
+	s.w.resize((words + step - 1) / step);
+	const uint32_t *p = (const uint32_t *)g_fb.map;
 	size_t n = 0;
-	for (size_t i = 0; i < words; i += SAMPLE_STEP)
+	for (size_t i = 0; i < words; i += step)
 		s.w[n++] = p[i];
 	s.t = now_us();
 }
@@ -277,12 +277,12 @@ static void save_dump(const char *tag, const Samples &s, int idx)
 	FILE *f = fopen(name, "wb");
 	if (!f)
 		return;
-	size_t page = (size_t)g_fb.f.line_length * g_fb.v.yres;
-	size_t base = (size_t)s.yoff * g_fb.f.line_length;
-	if (base + page > g_fb.len) { base = 0; if (page > g_fb.len) page = g_fb.len; }
+	size_t page = (size_t)g_fb.f.line_length * (g_fb.v.yres_virtual ? g_fb.v.yres_virtual : g_fb.v.yres);
+	size_t base = 0;
+	if (page > g_fb.len || page == 0) page = g_fb.len;
 	fwrite(g_fb.map + base, 1, page, f);
 	fclose(f);
-	printf("DISP   saved the visible page to %s (%u x %u, line %u bytes, %u bpp)\n", name, g_fb.v.xres, g_fb.v.yres, g_fb.f.line_length, g_fb.v.bits_per_pixel);
+	printf("DISP   saved /dev/fb%d to %s (%u x %u, line %u bytes, %u bpp)\n", g_fb.index, name, g_fb.v.xres, g_fb.v.yres, g_fb.f.line_length, g_fb.v.bits_per_pixel);
 }
 
 /* present scene `which` and wait until the driver has shown it */
@@ -299,21 +299,37 @@ static void settle(int which)
 static bool capture_golds()
 {
 	g_haveGold = false;
-	for (int w = 0; w < 2; w++)
+	static const int order[4] = { 1, 0, 2, 3 };   /* the 480x854 panel buffer first: it is what is shown */
+	for (int k = 0; k < 4 && !g_haveGold && !g_abort; k++)
 	{
-		settle(w);
-		usleep(250000);
-		Samples a, b;
-		fb_read(a);
-		usleep(60000);
-		fb_read(b);
-		size_t d = count_diff(a, b);
-		printf("DISP gold %c: %zu samples, page offset %u, %zu differ between two reads 60 ms apart%s\n", 'A' + w, a.w.size(), b.yoff, d, d ? "  (the picture is not stable!)" : "");
-		g_gold[w] = b;
+		const Fb &c = g_cand[order[k]];
+		if (!c.ok)
+			continue;
+		g_fb = c;
+		printf("DISP trying /dev/fb%d for the read-back\n", c.index);
+		bool stable = true;
+		for (int w = 0; w < 2; w++)
+		{
+			settle(w);
+			usleep(250000);
+			Samples a, b;
+			fb_read(a);
+			usleep(60000);
+			fb_read(b);
+			size_t d = count_diff(a, b);
+			printf("DISP   gold %c from /dev/fb%d: %zu samples, %zu differ between two reads 60 ms apart%s\n", 'A' + w, c.index, a.w.size(), d, d ? "  (the picture is not stable)" : "");
+			stable = stable && d == 0;
+			g_gold[w] = b;
+		}
+		size_t ab = count_diff(g_gold[0], g_gold[1]);
+		printf("DISP   scene A and scene B differ in %zu of %zu samples of /dev/fb%d%s\n", ab, g_gold[0].w.size(), c.index,
+		       ab == 0 ? "  -> it does not show the difference" : !stable ? "  -> but it is not stable, cannot be used" : "");
+		g_haveGold = ab > 0 && stable;
+		if (g_haveGold)
+			printf("DISP read-back uses /dev/fb%d\n", c.index);
 	}
-	size_t ab = count_diff(g_gold[0], g_gold[1]);
-	printf("DISP scene A and scene B differ in %zu of %zu samples%s\n", ab, g_gold[0].w.size(), ab == 0 ? "  -> reading /dev/fb0 does not show the difference: no read-back possible" : "");
-	g_haveGold = ab > 0;
+	if (!g_haveGold)
+		printf("DISP no frame buffer could be used for the read-back\n");
 	fflush(stdout);
 	return g_haveGold;
 }
@@ -372,7 +388,7 @@ static void *reader_main(void *arg)
 				for (size_t j = 0; j < n; j++)
 					if (s.w[j] != g_gold[0].w[j] && s.w[j] != g_gold[1].w[j])
 					{
-						size_t word = j * SAMPLE_STEP;
+						size_t word = j * g_fb.step;
 						long x = (long)(word % line), y = (long)(word / line);
 						if (x < minx) minx = x;
 						if (x > maxx) maxx = x;
@@ -495,7 +511,8 @@ int disptest_run()
 		fflush(stdout);
 		return 1;
 	}
-	printf("DISP read-back of /dev/fb0 is %s\n", g_fb.ok ? "possible (mapped)" : "NOT possible (only timing will be measured)");
+	bool anyFb = g_cand[0].ok || g_cand[1].ok || g_cand[2].ok || g_cand[3].ok;
+	printf("DISP read-back is %s\n", anyFb ? "possible (frame buffers mapped)" : "NOT possible (only timing will be measured)");
 	fflush(stdout);
 	audio_init();
 	bool music = getenv("DM_DISPTEST_NOMUSIC") == NULL;
@@ -508,13 +525,13 @@ int disptest_run()
 			usleep(20000);
 		}
 	}
-	run_series(music ? "music playing" : "no music", g_fb.ok);
+	run_series(music ? "music playing" : "no music", anyFb);
 	if (music && !g_abort)
 	{
 		music_play_folder("");   /* stops the music (no such folder) */
 		music_set_volume(0);
 		usleep(300000);
-		run_series("no music", g_fb.ok);
+		run_series("no music", anyFb);
 	}
 	printf("DISP display test finished\n");
 	fflush(stdout);
