@@ -199,11 +199,14 @@ const FrameRec *frame_at(uint32_t n)
 }
 
 int g_dumps = 0;
+long g_cls[3] = {0, 0, 0};          /* anomalies whose best match in the whole ring is: the chosen frame, another frame, no frame */
+long g_deltaHist[9] = {};           /* other frame minus chosen frame, -4..+4 (index 0..8) */
+long g_deltaOut = 0;                /* ... or farther away */
 
 void save_dump(int slot, uint32_t frame, const uint32_t *words)
 {
 	(void)words;
-	if (g_dumps >= 6)
+	if (g_dumps >= 10)
 		return;
 	const FrameRec *f = frame_at(frame);
 	if (!f)
@@ -425,6 +428,47 @@ void *reader_main(void *)
 								printf("SLOTCHECK   also cell x %d..%d y %d..%d: error %.0f, usually %.0f\n", (c % NCX) * CELL_W, (c % NCX) * CELL_W + CELL_W - 1, (c / NCX) * CELL_H, (c / NCX) * CELL_H + CELL_H - 1, err2[c], base[c]);
 								shown++;
 							}
+						/* is the picture any frame we sent? look through the whole ring */
+						{
+							float errT[NCELLS], bestM = 1e30f, chM = 1e30f;
+							uint32_t bestF = chosen;
+							int bestStill = 0;
+							uint32_t newest = g_sent;
+							for (uint32_t k = 1; k < (uint32_t)RING - 3 && k <= newest; k++)
+							{
+								uint32_t g = newest - k;
+								const FrameRec *gf = frame_at(g);
+								if (!gf) continue;
+								float m = eval_slot(w2.data(), gf->px, errT);
+								if (g == chosen) chM = m;
+								if (m < bestM)
+								{
+									bestM = m;
+									bestF = g;
+									bestStill = 0;
+									for (int c = 0; c < NCELLS; c++)
+										if (errT[c] > base[c] + 22 && errT[c] > 30) bestStill++;
+								}
+							}
+							if (bestF != chosen && chM - bestM < 1.0f)   /* a tie (a still picture is the same in many frames): the expected frame stands */
+							{
+								bestF = chosen;
+								bestM = chM;
+								bestStill = still;
+							}
+							const FrameRec *bf = frame_at(bestF);
+							if (bestF == chosen) { g_cls[0]++; }
+							else if (bestStill == 0) 
+							{
+								g_cls[1]++;
+								long d = (long)bestF - (long)chosen;
+								if (d >= -4 && d <= 4) g_deltaHist[d + 4]++; else g_deltaOut++;
+							}
+							else g_cls[2]++;
+							printf("SLOTCHECK   whole ring: best match frame %u (%+ld from the expected one, sent %.0f ms ago), mean error %.1f against %.1f for the expected frame, %d cells still far off -> %s\n", bestF, (long)bestF - (long)chosen,
+							       bf ? (now_us() - bf->t) / 1000.0 : -1.0, bestM, chM, bestStill,
+							       bestF == chosen ? "the expected frame is the closest, so the driver's picture is not any frame we sent" : bestStill == 0 ? "another frame we sent (frame timing, not a bad picture)" : "no frame we sent matches");
+						}
 						save_dump(p * 2, chosen, w2.data());
 						fflush(stdout);
 					}
@@ -448,7 +492,7 @@ void *reader_main(void *)
 				if (!p95 && acc * 100 >= total * 95) p95 = i * 2;
 				if (!p99 && acc * 100 >= total * 99) p99 = i * 2;
 			}
-			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d; %ld scans, %ld calibrations (%.0f ms each), a slot read takes %.1f ms and its checks %.1f ms\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99, scans, calibrations, calibrations ? calMs / calibrations : 0.0, reads ? readMs / reads : 0.0, st.checks ? evalMs / st.checks : 0.0);
+			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d; %ld scans, %ld calibrations (%.0f ms each), a slot read takes %.1f ms and its checks %.1f ms; anomalies by whole-ring search: %ld other-frame (offsets -4..+4: %ld %ld %ld %ld . %ld %ld %ld %ld, farther %ld), %ld none match, %ld expected frame closest\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99, scans, calibrations, calibrations ? calMs / calibrations : 0.0, reads ? readMs / reads : 0.0, st.checks ? evalMs / st.checks : 0.0, g_cls[1], g_deltaHist[0], g_deltaHist[1], g_deltaHist[2], g_deltaHist[3], g_deltaHist[5], g_deltaHist[6], g_deltaHist[7], g_deltaHist[8], g_deltaOut, g_cls[2], g_cls[0]);
 			fflush(stdout);
 		}
 		usleep(40000);
