@@ -199,20 +199,23 @@ const FrameRec *frame_at(uint32_t n)
 }
 
 int g_dumps = 0;
+uint64_t g_t0 = 0;   /* when the check started */
+double since_start() { return (now_us() - g_t0) / 1e6; }
 long g_cls[3] = {0, 0, 0};          /* anomalies whose best match in the whole ring is: the chosen frame, another frame, no frame */
 long g_deltaHist[9] = {};           /* other frame minus chosen frame, -4..+4 (index 0..8) */
-long g_deltaOut = 0;                /* ... or farther away */
+long g_deltaOut = 0;
+long g_known = 0;                   /* unexplained anomalies that only repeat a mismatch already seen in the same cells */
+int g_noCount[NCELLS];
+float g_noErr[NCELLS];                /* ... or farther away */
 
 void save_dump(int slot, uint32_t frame, const uint32_t *words)
 {
 	(void)words;
-	if (g_dumps >= 10)
-		return;
 	const FrameRec *f = frame_at(frame);
 	if (!f)
 		return;
 	char name[96];
-	snprintf(name, sizeof name, "slotcheck_%d_slot.raw", g_dumps);
+	snprintf(name, sizeof name, "slotcheck_%d_slot.raw", g_dumps % 10);
 	FILE *o = fopen(name, "wb");
 	if (o)
 	{
@@ -221,14 +224,14 @@ void save_dump(int slot, uint32_t frame, const uint32_t *words)
 			fwrite(g_map + (size_t)(y0 + r) * g_line + (size_t)x0 * 2, 1, (size_t)SLOT_W * 2, o);
 		fclose(o);
 	}
-	snprintf(name, sizeof name, "slotcheck_%d_canvas.raw", g_dumps);
+	snprintf(name, sizeof name, "slotcheck_%d_canvas.raw", g_dumps % 10);
 	o = fopen(name, "wb");
 	if (o)
 	{
 		fwrite(f->px, 1, (size_t)g_W * g_H * 2, o);
 		fclose(o);
 	}
-	printf("SLOTCHECK   saved slotcheck_%d_slot.raw (640 x 240, 16 bit, the driver's picture) and slotcheck_%d_canvas.raw (%d x %d, what we sent)\n", g_dumps, g_dumps, g_W, g_H);
+	printf("SLOTCHECK   saved slotcheck_%d_slot.raw (640 x 240, 16 bit, the driver's picture) and slotcheck_%d_canvas.raw (%d x %d, what we sent) at t=%.1f s; the newest 10 are kept, this is number %d\n", g_dumps % 10, g_dumps % 10, g_W, g_H, since_start(), g_dumps + 1);
 	g_dumps++;
 }
 
@@ -420,7 +423,7 @@ void *reader_main(void *)
 					{
 						lastRep[p] = chosen;
 						st.anomalies++;
-						printf("SLOTCHECK ANOMALY: frame %u (sent %.0f ms ago) in slot %d: %d of %d cells are far off; worst cell x %d..%d y %d..%d of the slot: error %.0f, usually %.0f\n", chosen,
+						printf("SLOTCHECK ANOMALY at t=%.1f s: frame %u (sent %.0f ms ago) in slot %d: %d of %d cells are far off; worst cell x %d..%d y %d..%d of the slot: error %.0f, usually %.0f\n", since_start(), chosen,
 						       (now_us() - fc->t) / 1000.0, p * 2, still, NCELLS, (worst % NCX) * CELL_W, (worst % NCX) * CELL_W + CELL_W - 1, (worst / NCX) * CELL_H, (worst / NCX) * CELL_H + CELL_H - 1, err2[worst], base[worst]);
 						for (int c = 0, shown = 0; c < NCELLS && shown < 4; c++)
 							if (err2[c] > base[c] + 22 && err2[c] > 30 && c != worst)
@@ -473,7 +476,25 @@ void *reader_main(void *)
 							       bf ? (now_us() - bf->t) / 1000.0 : -1.0, bestM, chM, bestOk ? 0 : bestStill,
 							       cls == 0 ? "the expected frame fits after all (a false alarm)" : cls == 1 ? "another frame we sent (frame timing, not a bad picture)" : "NO frame we sent matches this picture");
 							if (cls == 2)
-								save_dump(p * 2, bestF, w2.data());
+							{
+								/* the same cells, the same size of error, again and again: a still picture the model gets slightly wrong
+								 * (sharp text, small sprites), not a glitch. Only something new is dumped. */
+								bool novel = false;
+								for (int c = 0; c < NCELLS; c++)
+									if (err2[c] > base[c] + 22 && err2[c] > 30)
+									{
+										if (g_noCount[c] < 3 || err2[c] > g_noErr[c] + 25) novel = true;
+										g_noCount[c]++;
+										g_noErr[c] = g_noCount[c] == 1 ? err2[c] : g_noErr[c] * 0.7f + err2[c] * 0.3f;
+									}
+								if (novel)
+									save_dump(p * 2, bestF, w2.data());
+								else
+								{
+									g_known++;
+									printf("SLOTCHECK   (a mismatch seen before in the same cells: not saved)\n");
+								}
+							}
 						}
 						fflush(stdout);
 					}
@@ -497,7 +518,7 @@ void *reader_main(void *)
 				if (!p95 && acc * 100 >= total * 95) p95 = i * 2;
 				if (!p99 && acc * 100 >= total * 99) p99 = i * 2;
 			}
-			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d; %ld scans, %ld calibrations (%.0f ms each), a slot read takes %.1f ms and its checks %.1f ms; anomalies by whole-ring search: %ld other-frame (offsets -4..+4: %ld %ld %ld %ld . %ld %ld %ld %ld, farther %ld), %ld NO frame matches, %ld false alarms\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99, scans, calibrations, calibrations ? calMs / calibrations : 0.0, reads ? readMs / reads : 0.0, st.checks ? evalMs / st.checks : 0.0, g_cls[1], g_deltaHist[0], g_deltaHist[1], g_deltaHist[2], g_deltaHist[3], g_deltaHist[5], g_deltaHist[6], g_deltaHist[7], g_deltaHist[8], g_deltaOut, g_cls[2], g_cls[0]);
+			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d; %ld scans, %ld calibrations (%.0f ms each), a slot read takes %.1f ms and its checks %.1f ms; anomalies by whole-ring search: %ld other-frame (offsets -4..+4: %ld %ld %ld %ld . %ld %ld %ld %ld, farther %ld), %ld NO frame matches (%ld of them repeats of known still-picture mismatches), %ld false alarms\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99, scans, calibrations, calibrations ? calMs / calibrations : 0.0, reads ? readMs / reads : 0.0, st.checks ? evalMs / st.checks : 0.0, g_cls[1], g_deltaHist[0], g_deltaHist[1], g_deltaHist[2], g_deltaHist[3], g_deltaHist[5], g_deltaHist[6], g_deltaHist[7], g_deltaHist[8], g_deltaOut, g_cls[2], g_known, g_cls[0]);
 			fflush(stdout);
 		}
 		usleep(40000);
@@ -578,6 +599,7 @@ bool slotcheck_start()
 	}
 	g_on = true;
 	g_stop = false;
+	g_t0 = now_us();
 	g_threadOn = pthread_create(&g_th, NULL, reader_main, NULL) == 0;
 	printf("SLOTCHECK started: the last %d frames are kept and the driver's left slots are checked about ten times a second\n", RING);
 	fflush(stdout);
@@ -627,5 +649,7 @@ void slotcheck_stop()
 	g_stop = true;
 	if (g_threadOn)
 		pthread_join(g_th, NULL);
+	printf("SLOTCHECK stopped at t=%.1f s (the frames sent so far: %u)\n", since_start(), (unsigned)g_sent);
+	fflush(stdout);
 	g_on = false;
 }
