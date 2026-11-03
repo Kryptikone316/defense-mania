@@ -231,7 +231,32 @@ void gfx_present()
 	static int frame;
 	check_canvas();
 	if (hwdisp_active())
-		hwdisp_present(fb, SW, SH, SW * 2);
+	{
+		static int stretch = -1;
+		static uint16_t *pres[3];
+		static int presCur;
+		if (stretch < 0)
+		{
+			stretch = cfg_num("present_480", 0) != 0 && SW <= 640 && SH < 480;
+			if (stretch)
+				for (int i = 0; i < 3; i++)
+					pres[i] = (uint16_t *)calloc((size_t)SW * 480, sizeof(uint16_t));
+			if (stretch && !(pres[0] && pres[1] && pres[2]))
+				stretch = 0;
+		}
+		if (stretch)
+		{
+			/* the driver is said to prefer a full 640x480 frame: stretch ours to that height (it stretches it back to the
+			 * panel's shape itself), into a ring of buffers of its own */
+			uint16_t *o = pres[presCur];
+			presCur = (presCur + 1) % 3;
+			for (int y = 0; y < 480; y++)
+				memcpy(&o[(size_t)y * SW], &fb[(size_t)(y * SH / 480) * SW], (size_t)SW * 2);
+			hwdisp_present(o, SW, 480, SW * 2);
+		}
+		else
+			hwdisp_present(fb, SW, SH, SW * 2);
+	}
 	else
 		dump_frame(frame);
 	frame++;
@@ -346,6 +371,22 @@ void tint565_rect(Image565 &img, int x, int y, int w, int h, uint32_t rgb, int a
 		{
 			uint16_t &p = img.px[(size_t)yy * img.w + xx];
 			p = blend565(p, c, alpha);
+		}
+}
+
+/* lays a see-through picture (the HQ light rays) over an opaque canvas-format picture once, at its top-left corner */
+void bake_overlay565(Image565 &img, const Image &over)
+{
+	int w = over.w < img.w ? over.w : img.w, h = over.h < img.h ? over.h : img.h;
+	for (int y = 0; y < h; y++)
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t p = over.px[(size_t)y * over.w + x];
+			int a = p >> 24;
+			if (a < 4)
+				continue;
+			uint16_t &d = img.px[(size_t)y * img.w + x];
+			d = a >= 250 ? pack565((p >> 16) & 255, (p >> 8) & 255, p & 255) : blend565(d, pack565((p >> 16) & 255, (p >> 8) & 255, p & 255), a);
 		}
 }
 

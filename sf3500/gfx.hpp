@@ -45,6 +45,7 @@ struct Image565 {
 };
 bool load_image565(const std::string &path, Image565 &img);
 void tint565_rect(Image565 &img, int x, int y, int w, int h, uint32_t rgb, int alpha);   /* blend a colour over part of the picture */
+void bake_overlay565(Image565 &img, const Image &over);   /* blend a see-through picture into the map picture, once */
 void blit565_window(const Image565 &img, int sx, int sy);   /* the canvas-sized window at (sx,sy), clipped to the image */
 
 /* ---- shapes (colour 0xRRGGBB) ---- */

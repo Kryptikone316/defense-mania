@@ -859,8 +859,16 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 	load_image("data/hud_play.png", hudPlay);
 	load_image("data/build.png", hudBuild);
 	load_image("data/menu.png", hudMenu);
-	if (optHQ)
-		load_image("data/ray1.png", lightRay);
+	if (optHQ && load_image("data/ray1.png", lightRay))
+	{
+		/* The maps stand still, so the light rays are blended into the map picture once, here, instead of over every
+		 * frame (that cost about 60 ms a frame on the device). */
+		uint32_t t0 = millis();
+		bake_overlay565(mapImage, lightRay);
+		lightRay = Image();
+		printf("light rays baked into the map in %u ms\n", (unsigned)(millis() - t0));
+		fflush(stdout);
+	}
 	waves = new Waves(path, this, endless);
 	ok = !waves->waves.empty();
 	startMessage();
@@ -1107,9 +1115,10 @@ void Map::drawHud()
 	if (waves->current + 1 < (int)waves->waves.size() && waves->waves[waves->current + 1])
 	{
 		Wave *nw = waves->waves[waves->current + 1];
+		int iconX = SW - 358 + text_width(b, 11, 2) + 8;   /* right after the words, as in the original */
 		for (size_t i = 0; i < nw->nextIcons.size(); i++)
 			if (nw->nextIcons[i])
-				draw_image(nw->nextIcons[i]->img, SW - 165 + (int)i * 32, SH - 30);
+				draw_image(nw->nextIcons[i]->img, iconX + (int)i * 32, SH - 30);
 	}
 	/* the three buttons, bottom left, each with the pad button that works it */
 	draw_image(pause ? hudPlay : hudPause, 13, SH - 49);
