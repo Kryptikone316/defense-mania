@@ -9,6 +9,7 @@
 #include <vector>
 
 extern float globalSpeed;
+extern int g_prof[5], g_profEnemies, g_profTowers;
 uint32_t gnow();   /* the game clock, see game.cpp */
 void game_clock_reset();
 extern bool optShowFps, optHQ;

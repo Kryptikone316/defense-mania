@@ -1126,10 +1126,11 @@ int main()
 		lastFrame = now;
 		static int hitches;
 		static int partsPlay, partsMusic, partsPresent;   /* where the last frame spent its time */
-		if (dt > 80 && screen == S_GAME && hitches < 30)   /* a pause in the frames, noted in log.txt */
+		if (dt > (getenv("DM_HITCH_MS") ? atof(getenv("DM_HITCH_MS")) : 80) && screen == S_GAME && hitches < 30)   /* a pause in the frames, noted in log.txt */
 		{
 			hitches++;
-			printf("frame hitch: %.0f ms (the frame before spent %d ms in the game, %d ms in the music, %d ms presenting)\n", dt, partsPlay, partsMusic, partsPresent);
+			printf("frame hitch: %.0f ms (the frame before spent %d ms in the game, %d ms in the music, %d ms presenting; drawing: map %d, list %d, sprites %d, bars/shots %d ms; %d enemies, %d towers%s)\n", dt, partsPlay, partsMusic, partsPresent,
+			       g_prof[0], g_prof[1], g_prof[2], g_prof[3], g_profEnemies, g_profTowers, play.map && play.map->showBuildAreas ? ", build areas shown" : "");
 			fflush(stdout);
 		}
 		padPrev = padNow;
@@ -1171,6 +1172,7 @@ int main()
 			if (getenv("DM_CURSOR"))   /* test hook: start the cursor at x,y on the screen */
 				sscanf(getenv("DM_CURSOR"), "%f,%f", &play.cx, &play.cy);
 			play.started = (int)millis();
+			if (getenv("DM_BUILDAREAS")) play.map->showBuildAreas = true;   /* test hook */
 			camX = camY = 0;
 			if (!play.map->ok)
 			{

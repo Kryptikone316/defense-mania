@@ -940,8 +940,11 @@ void Map::checkTowers(int x, int y, int radius, int damage)
 struct DrawItem { float y; Tower *tower; Enemy *enemy; };
 static bool by_y(const DrawItem &a, const DrawItem &b) { return a.y < b.y; }
 
+int g_prof[5], g_profEnemies, g_profTowers;   /* ms spent in the parts of the last Map::display(), for the hitch log */
+
 void Map::display()
 {
+	uint32_t p0 = millis();
 	game_clock_advance();
 	blit565_window(mapImage, camX, camY);
 	if (showBuildAreas)
@@ -956,8 +959,10 @@ void Map::display()
 						fill_rect(x + 1, y + 1, tileSize - 2, tileSize - 2, 0x339933, 110);
 				}
 			}
+	uint32_t p1 = millis();
 	/* towers and enemies, back to front */
 	std::vector<DrawItem> items;
+	g_profEnemies = 0;
 	for (size_t i = 0; i < towers.size(); i++)
 	{
 		DrawItem d = { (towers[i]->position[1] + 0.5f) * tileSize, towers[i], NULL };
@@ -974,16 +979,20 @@ void Map::display()
 				y = -50;
 			DrawItem d = { y, NULL, e };
 			items.push_back(d);
+			if (e->enemyAlive) g_profEnemies++;
 		}
 		waves->waveComplete();
 		w->calcEnemyDistance();
 	}
+	g_profTowers = (int)towers.size();
+	uint32_t p2 = millis();
 	std::stable_sort(items.begin(), items.end(), by_y);
 	for (size_t i = 0; i < items.size(); i++)
 	{
 		if (items[i].tower) items[i].tower->display();
 		else items[i].enemy->display();
 	}
+	uint32_t p3 = millis();
 	if (waves)
 		waves->displayGui();
 	for (size_t i = 0; i < towers.size(); i++)
@@ -998,6 +1007,11 @@ void Map::display()
 	for (size_t i = 0; i < g_graveyard.size(); i++)
 		delete g_graveyard[i];
 	g_graveyard.clear();
+	uint32_t p4 = millis();
+	g_prof[0] = (int)(p1 - p0);   /* map picture and build areas */
+	g_prof[1] = (int)(p2 - p1);   /* making the list of what to draw */
+	g_prof[2] = (int)(p3 - p2);   /* towers and enemies */
+	g_prof[3] = (int)(p4 - p3);   /* bars, shots, hit animations */
 }
 
 /* ------------------------------------------------------------------ flow and the on-screen messages */
