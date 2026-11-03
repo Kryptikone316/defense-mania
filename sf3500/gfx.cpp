@@ -1,3 +1,4 @@
+#include <time.h>
 #include "gfx.hpp"
 #include "slotcheck.hpp"
 #include "hwdisp.hpp"
@@ -267,6 +268,29 @@ void gfx_present()
 		dump_frame(frame);
 	slotcheck_after_present(fb, SW, SH);
 	frame++;
+	{
+		/* fps_cap = N in defensemania.cfg: never send frames faster than N a second (0 = as fast as they come) */
+		static double capHz = -1;
+		static struct timespec next;
+		if (capHz < 0)
+		{
+			capHz = cfg_num("fps_cap", 0);
+			clock_gettime(CLOCK_MONOTONIC, &next);
+		}
+		if (capHz >= 5)
+		{
+			long step = (long)(1e9 / capHz);
+			next.tv_nsec += step;
+			while (next.tv_nsec >= 1000000000L) { next.tv_nsec -= 1000000000L; next.tv_sec++; }
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long late = (now.tv_sec - next.tv_sec) * 1000000000L + (now.tv_nsec - next.tv_nsec);
+			if (late > 100000000L)   /* far behind (a map load, a pause): start over instead of rushing */
+				next = now;
+			else if (late < 0)
+				clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+		}
+	}
 	if (fbCount > 1)   /* the next frame goes into another buffer */
 	{
 		fbCur = (fbCur + 1) % fbCount;

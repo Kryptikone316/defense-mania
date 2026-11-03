@@ -505,7 +505,7 @@ void *reader_main(void *)
 				base[c] = base[c] * 0.97f + err[c] * 0.03f;
 		}
 		scans++;
-		if (now_us() - lastStatus > 30000000ull)
+		if (now_us() - lastStatus > 10000000ull)
 		{
 			lastStatus = now_us();
 			long total = 0, acc = 0;
