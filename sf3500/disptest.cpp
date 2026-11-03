@@ -2,14 +2,16 @@
  *
  * Question it answers: does what the game hands to the display driver come out of the driver unchanged? A rare "ghost"
  * (a tower that vanishes for two frames and shows up elsewhere) was filmed on the device. The driver copies every frame
- * into its own queue (video_driver_disp_frame -> fbdev_draw_frame) and separate threads render it through the graphics
- * engine into /dev/fb0, so the artifact must happen after our call returns. This test
- *   1. looks at /dev/fb0 (geometry, whether it can be read and whether it follows what is sent),
- *   2. times every present call under several pacings,
- *   3. replays game-like frames (the Maze map, towers, an enemy, the HUD) as two scenes A and B that differ in a few
- *      small places, like consecutive game frames, in several rhythms (25 ms, 16.7 ms, random, bursts, free-running),
- *      and reads /dev/fb0 back at several delays after each present. Every read must look like A or B (or a mix of the
- *      two while the driver is still copying); anything that is neither is the artifact and is logged with its place.
+ * into its own queue (video_driver_disp_frame -> fbdev_draw_frame) and render threads put it through the graphics engine
+ * into /dev/fb0. A dump of /dev/fb0 taken during the first read-back test showed what is in there: a ring of 36 slots of
+ * 640 x 240 pixels (18 bands of 240 rows, two slots side by side in the 1280-pixel rows), each holding one frame, rotated
+ * and squeezed by the graphics engine. The same input must always give the same slot, so this test
+ *   1. times every present call under several pacings,
+ *   2. sends two game-like scenes (the Maze map, towers, an enemy, the cursor, the HUD) A and B, each long enough to fill
+ *      the whole ring, and keeps one slot of each as the reference picture (and checks that all 36 slots agree),
+ *   3. then sends A and B in several rhythms (25 ms, 16.7 ms, bursts, jitter, slow, free-running) while a reader thread
+ *      keeps looking at all 36 slots: every slot must look like A or B. A slot that is neither (re-read to rule out a
+ *      write in progress) is the artifact: it is logged with the part of the picture that differs and saved to a file.
  * It runs the whole series with music playing and once more without. Select + Start leaves at any time. */
 #include "audio.hpp"
 #include "gfx.hpp"
@@ -17,10 +19,10 @@
 #include "joykey.hpp"
 
 #include <errno.h>
-#include <pthread.h>
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +68,7 @@ static bool abort_requested()
 	return g_abort;
 }
 
-/* ------------------------------------------------------------------ /dev/fb0 */
+/* ------------------------------------------------------------------ /dev/fb0 and its slots */
 struct Fb
 {
 	int fd = -1;
@@ -75,16 +77,17 @@ struct Fb
 	const uint8_t *map = NULL;
 	size_t len = 0;
 	bool ok = false;
-	int step = 7;       /* every step-th 32-bit word is sampled */
-	int index = 0;      /* /dev/fb<index> */
 };
+static Fb g_fb;
 
-static Fb g_fb;           /* the one being read back */
-static Fb g_cand[4];      /* every frame buffer that could be mapped */
+/* slot geometry found in the dump (see the top of the file) */
+static const int SLOT_W = 640, SLOT_H = 240, SLOT_COLS = 2, SLOT_BANDS = 18, SLOTS = SLOT_COLS * SLOT_BANDS;
+static const int ROW_STEP = 3, WORD_STEP = 7;   /* every 3rd row, every 7th 32-bit word of it */
+static size_t g_lineBytes = 2560;
 
-/* Self-check without a device (DM_DISPTEST_FAKEFB=1, for the emulator): a fake /dev/fb0 that is a copy of the last frame
- * sent, with a block of it displaced now and then, to prove that the read-back and the anomaly report work. */
-static uint8_t g_fakeFb[640 * 480 * 2];
+/* Self-check without a device (DM_DISPTEST_FAKEFB=1, for the emulator): a fake /dev/fb0 with the same slot ring, filled
+ * from the canvas, with a block displaced now and then, to prove that the reader and the anomaly report work. */
+static uint8_t *g_fakeFb;
 static bool g_fake;
 static int g_fakeCount;
 
@@ -92,11 +95,16 @@ static void fake_after_present(const uint16_t *canvas)
 {
 	if (!g_fake)
 		return;
-	size_t line = (size_t)SW;
-	memcpy(g_fakeFb, canvas, line * SH * 2);
-	if (++g_fakeCount % 97 == 0)   /* the glitch: a 64 x 64 block copied to another place */
+	int slot = g_fakeCount % SLOTS;
+	int x0 = (slot % SLOT_COLS) * SLOT_W, y0 = (slot / SLOT_COLS) * SLOT_H;
+	for (int y = 0; y < SLOT_H; y++)   /* a squeezed copy of the canvas */
+	{
+		const uint16_t *src = canvas + (size_t)(y * SH / SLOT_H) * SW;
+		memcpy(g_fakeFb + (size_t)(y0 + y) * g_lineBytes + (size_t)x0 * 2, src, (size_t)(SW < SLOT_W ? SW : SLOT_W) * 2);
+	}
+	if (++g_fakeCount % 97 == 0)   /* the glitch: a 64 x 64 block copied to another place in the slot */
 		for (int y = 0; y < 64; y++)
-			memcpy(&g_fakeFb[((size_t)(60 + y) * line + 400) * 2], &g_fakeFb[((size_t)(60 + y) * line + 80) * 2], 64 * 2);
+			memcpy(g_fakeFb + (size_t)(y0 + 60 + y) * g_lineBytes + (size_t)(x0 + 400) * 2, g_fakeFb + (size_t)(y0 + 60 + y) * g_lineBytes + (size_t)(x0 + 80) * 2, 64 * 2);
 }
 
 static void present_frame()
@@ -117,16 +125,12 @@ static void fb_probe()
 	if (getenv("DM_DISPTEST_FAKEFB"))
 	{
 		g_fake = true;
-		g_fb.fd = -1;
+		g_fakeFb = (uint8_t *)calloc(1, g_lineBytes * 4320);
 		memset(&g_fb.v, 0, sizeof g_fb.v);
 		memset(&g_fb.f, 0, sizeof g_fb.f);
-		g_fb.v.xres = SW; g_fb.v.yres = SH; g_fb.v.yres_virtual = SH; g_fb.v.bits_per_pixel = 16;
-		g_fb.f.line_length = SW * 2;
-		g_fb.f.smem_len = sizeof g_fakeFb;
 		g_fb.map = g_fakeFb;
-		g_fb.len = sizeof g_fakeFb;
+		g_fb.len = g_lineBytes * 4320;
 		g_fb.ok = true;
-		g_cand[0] = g_fb;
 		printf("DISP using a FAKE frame buffer (self-check)\n");
 		return;
 	}
@@ -149,9 +153,8 @@ static void fb_probe()
 		int r1 = ioctl(fd, FBIOGET_VSCREENINFO, &v), r2 = ioctl(fd, FBIOGET_FSCREENINFO, &f);
 		printf("DISP %s: id '%s' vscreen %s fscreen %s\n", path, f.id, r1 ? "failed" : "ok", r2 ? "failed" : "ok");
 		if (!r1)
-			printf("DISP   res %ux%u virtual %ux%u offset %u,%u bpp %u rotate %u  line %u bytes  smem_len %u  type %u visual %u accel %u\n", v.xres, v.yres, v.xres_virtual, v.yres_virtual,
-			       v.xoffset, v.yoffset, v.bits_per_pixel, v.rotate, f.line_length, f.smem_len, f.type, f.visual, f.accel);
-		if (!r1 && !r2 && f.smem_len > 0)
+			printf("DISP   res %ux%u virtual %ux%u offset %u,%u bpp %u line %u bytes  smem_len %u\n", v.xres, v.yres, v.xres_virtual, v.yres_virtual, v.xoffset, v.yoffset, v.bits_per_pixel, f.line_length, f.smem_len);
+		if (i == 0 && !r1 && !r2 && f.smem_len > 0 && v.bits_per_pixel == 16)
 		{
 			size_t len = f.smem_len > (16u << 20) ? (16u << 20) : f.smem_len;
 			void *m = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
@@ -159,52 +162,51 @@ static void fb_probe()
 				printf("DISP   mmap of %s failed (%s)\n", path, strerror(errno));
 			else
 			{
-				Fb &c = g_cand[i];
-				c.fd = fd;
-				c.v = v;
-				c.f = f;
-				c.map = (const uint8_t *)m;
-				c.len = len;
-				c.ok = true;
-				c.index = i;
-				c.step = len > (4u << 20) ? 61 : 7;   /* the big canvas is sampled more sparsely */
-				printf("DISP   mapped %zu bytes of %s for reading (sampling every %d words)\n", len, path, c.step);
+				g_fb.fd = fd;
+				g_fb.v = v;
+				g_fb.f = f;
+				g_fb.map = (const uint8_t *)m;
+				g_fb.len = len;
+				g_fb.ok = true;
+				g_lineBytes = f.line_length;
+				printf("DISP   mapped %zu bytes of %s for reading\n", len, path);
 				continue;   /* keep fd open */
 			}
 		}
 		close(fd);
 	}
+	if (g_fb.ok && g_lineBytes * (size_t)(SLOT_BANDS * SLOT_H) > g_fb.len)
+	{
+		printf("DISP   the mapping is too small for the 36-slot layout: read-back off\n");
+		g_fb.ok = false;
+	}
 	fflush(stdout);
 }
 
-/* One sample set: every 7th 32-bit word of the visible page (the page the driver is showing right now). */
-struct Samples
+/* A slot's samples: every ROW_STEP-th row, every WORD_STEP-th word of it. */
+struct Slot
 {
 	std::vector<uint32_t> w;
-	unsigned yoff = 0;
-	uint64_t t = 0;
 };
+static const int WORDS_PER_ROW = SLOT_W / 2;   /* two 16-bit pixels per word */
+static const int SAMPLES_PER_ROW = (WORDS_PER_ROW + WORD_STEP - 1) / WORD_STEP;
 
-static void fb_read(Samples &s)
+static void slot_read(int slot, Slot &s)
 {
-	/* the whole mapped frame (these frame buffers do not pan: the panel one is exactly one screen) */
-	size_t page = (size_t)g_fb.f.line_length * (g_fb.v.yres_virtual ? g_fb.v.yres_virtual : g_fb.v.yres);
-	if (page > g_fb.len || page == 0)
-		page = g_fb.len;
-	size_t words = page / 4;
-	int step = g_fb.step;
-	s.yoff = 0;
-	s.w.resize((words + step - 1) / step);
-	const uint32_t *p = (const uint32_t *)g_fb.map;
+	int x0 = (slot % SLOT_COLS) * SLOT_W, y0 = (slot / SLOT_COLS) * SLOT_H;
+	s.w.resize((size_t)(SLOT_H / ROW_STEP) * SAMPLES_PER_ROW);
 	size_t n = 0;
-	for (size_t i = 0; i < words; i += step)
-		s.w[n++] = p[i];
-	s.t = now_us();
+	for (int ry = 0; ry < SLOT_H; ry += ROW_STEP)
+	{
+		const uint32_t *row = (const uint32_t *)(g_fb.map + (size_t)(y0 + ry) * g_lineBytes + (size_t)x0 * 2);
+		for (int k = 0; k < WORDS_PER_ROW; k += WORD_STEP)
+			s.w[n++] = row[k];
+	}
 }
 
-static size_t count_diff(const Samples &a, const Samples &b)
+static size_t slot_diff(const Slot &a, const Slot &b)
 {
-	size_t n = a.w.size() < b.w.size() ? a.w.size() : b.w.size(), d = 0;
+	size_t d = 0, n = a.w.size() < b.w.size() ? a.w.size() : b.w.size();
 	for (size_t i = 0; i < n; i++)
 		d += a.w[i] != b.w[i];
 	return d;
@@ -225,7 +227,7 @@ static bool load_assets()
 }
 
 /* scene 0 = A, 1 = B: B differs from A by a tower's animation frame, an enemy's step, the cursor and a number */
-static void draw_scene(int which, int phase = 0)
+static void draw_scene(int which)
 {
 	blit565_window(g_map, 0, 0);
 	static const int tx[7] = { 1, 2, 3, 1, 2, 3, 4 }, ty[7] = { 1, 1, 1, 3, 3, 3, 3 };
@@ -247,7 +249,67 @@ static void draw_scene(int which, int phase = 0)
 	snprintf(b, sizeof b, "$ %d   SCORE %d", 285 + which, 1750 + which * 10);
 	draw_text(b, 8, 8, 13, 0xFFE066, ALIGN_LEFT, 2, 255, 0x000000);
 	draw_text("DISPLAY TEST   Select+Start: exit", SW / 2, SH - 16, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
-	(void)phase;
+}
+
+/* ------------------------------------------------------------------ the references */
+static Slot g_ref[2];
+static bool g_haveRef;
+static int g_dumps;
+
+static void save_slot(const char *tag, int slot, int idx)
+{
+	if (g_dumps >= 8)
+		return;
+	g_dumps++;
+	char name[96];
+	snprintf(name, sizeof name, "dbg/disp_anomaly_%d_%s.raw", idx, tag);
+	FILE *f = fopen(name, "wb");
+	if (!f)
+		return;
+	int x0 = (slot % SLOT_COLS) * SLOT_W, y0 = (slot / SLOT_COLS) * SLOT_H;
+	for (int ry = 0; ry < SLOT_H; ry++)
+		fwrite(g_fb.map + (size_t)(y0 + ry) * g_lineBytes + (size_t)x0 * 2, 1, (size_t)SLOT_W * 2, f);
+	fclose(f);
+	printf("DISP   saved slot %d to %s (%d x %d pixels, 16 bpp)\n", slot, name, SLOT_W, SLOT_H);
+}
+
+/* send scene `which` often enough to fill the whole ring */
+static void settle(int which)
+{
+	for (int i = 0; i < SLOTS + 8 && !g_abort; i++)
+	{
+		draw_scene(which);
+		present_frame();
+		usleep(30000);
+	}
+	usleep(150000);
+}
+
+static bool capture_refs()
+{
+	g_haveRef = false;
+	for (int w = 0; w < 2; w++)
+	{
+		settle(w);
+		Slot first, other;
+		slot_read(0, first);
+		int same = 0;
+		size_t worst = 0;
+		for (int s = 0; s < SLOTS; s++)
+		{
+			slot_read(s, other);
+			size_t d = slot_diff(first, other);
+			same += d == 0;
+			if (d > worst) worst = d;
+		}
+		printf("DISP reference %c: %d of %d slots are identical to slot 0 (worst slot differs in %zu of %zu samples)\n", 'A' + w, same, SLOTS, worst, first.w.size());
+		g_ref[w] = first;
+	}
+	size_t ab = slot_diff(g_ref[0], g_ref[1]);
+	printf("DISP scene A and scene B differ in %zu of %zu samples of a slot%s\n", ab, g_ref[0].w.size(), ab == 0 ? "  -> the slots do not show the difference: no read-back possible" : "");
+	g_haveRef = ab > 0;
+	fflush(stdout);
+	return g_haveRef;
 }
 
 /* ------------------------------------------------------------------ test runs */
@@ -263,77 +325,6 @@ struct Stat
 	}
 };
 
-static Samples g_gold[2];
-static bool g_haveGold;
-static int g_dumps;
-
-static void save_dump(const char *tag, const Samples &s, int idx)
-{
-	if (g_dumps >= 8)
-		return;
-	g_dumps++;
-	char name[96];
-	snprintf(name, sizeof name, "dbg/disp_anomaly_%d_%s.raw", idx, tag);
-	FILE *f = fopen(name, "wb");
-	if (!f)
-		return;
-	size_t page = (size_t)g_fb.f.line_length * (g_fb.v.yres_virtual ? g_fb.v.yres_virtual : g_fb.v.yres);
-	size_t base = 0;
-	if (page > g_fb.len || page == 0) page = g_fb.len;
-	fwrite(g_fb.map + base, 1, page, f);
-	fclose(f);
-	printf("DISP   saved /dev/fb%d to %s (%u x %u, line %u bytes, %u bpp)\n", g_fb.index, name, g_fb.v.xres, g_fb.v.yres, g_fb.f.line_length, g_fb.v.bits_per_pixel);
-}
-
-/* present scene `which` and wait until the driver has shown it */
-static void settle(int which)
-{
-	for (int i = 0; i < 3; i++)
-	{
-		draw_scene(which);
-		present_frame();
-		usleep(90000);
-	}
-}
-
-static bool capture_golds()
-{
-	g_haveGold = false;
-	static const int order[4] = { 1, 0, 2, 3 };   /* the 480x854 panel buffer first: it is what is shown */
-	for (int k = 0; k < 4 && !g_haveGold && !g_abort; k++)
-	{
-		const Fb &c = g_cand[order[k]];
-		if (!c.ok)
-			continue;
-		g_fb = c;
-		printf("DISP trying /dev/fb%d for the read-back\n", c.index);
-		bool stable = true;
-		for (int w = 0; w < 2; w++)
-		{
-			settle(w);
-			usleep(250000);
-			Samples a, b;
-			fb_read(a);
-			usleep(60000);
-			fb_read(b);
-			size_t d = count_diff(a, b);
-			printf("DISP   gold %c from /dev/fb%d: %zu samples, %zu differ between two reads 60 ms apart%s\n", 'A' + w, c.index, a.w.size(), d, d ? "  (the picture is not stable)" : "");
-			stable = stable && d == 0;
-			g_gold[w] = b;
-		}
-		size_t ab = count_diff(g_gold[0], g_gold[1]);
-		printf("DISP   scene A and scene B differ in %zu of %zu samples of /dev/fb%d%s\n", ab, g_gold[0].w.size(), c.index,
-		       ab == 0 ? "  -> it does not show the difference" : !stable ? "  -> but it is not stable, cannot be used" : "");
-		g_haveGold = ab > 0 && stable;
-		if (g_haveGold)
-			printf("DISP read-back uses /dev/fb%d\n", c.index);
-	}
-	if (!g_haveGold)
-		printf("DISP no frame buffer could be used for the read-back\n");
-	fflush(stdout);
-	return g_haveGold;
-}
-
 struct Pattern
 {
 	const char *name;
@@ -342,72 +333,70 @@ struct Pattern
 	int paceUs;
 };
 
-/* The reader runs on a thread of its own and samples /dev/fb0 over and over while the main thread presents frames at the
- * pace of the game; each sample is filed by how long ago the last present was. */
-static const int AGE_BUCKETS = 6;
-static const int g_ageLimitsMs[AGE_BUCKETS] = { 4, 8, 16, 33, 66, 100000 };
-
+/* The reader runs on a thread of its own and looks at all 36 slots over and over while the main thread presents
+ * frames at the pace of the game. */
 struct Reader
 {
 	volatile bool stop = false;
-	volatile uint64_t lastPresent = 0;
-	volatile int lastScene = 0, prevScene = 0, frameNo = 0;
-	long cnt[AGE_BUCKETS][4] = {};   /* [age][A, B, mix, ANOMALY] */
-	long reads = 0, anomalies = 0;
-	double readMs = 0, readMax = 0;
+	volatile int frameNo = 0, lastScene = 0;
+	long slotReads = 0, asA = 0, asB = 0, transient = 0, anomalies = 0, scans = 0;
+	double scanMs = 0, scanMax = 0;
 	const char *name = "";
 };
 
 static void *reader_main(void *arg)
 {
 	Reader *r = (Reader *)arg;
+	Slot s, again;
+	uint32_t lastBad[SLOTS] = {};   /* hash of the bad picture last reported per slot: a bad slot stays bad until it is overwritten */
 	while (!r->stop)
 	{
 		uint64_t t0 = now_us();
-		int scene = r->lastScene, prev = r->prevScene, frame = r->frameNo;
-		uint64_t lp = r->lastPresent;
-		Samples s;
-		fb_read(s);
-		double ms = (now_us() - t0) / 1000.0;
-		r->readMs += ms;
-		if (ms > r->readMax) r->readMax = ms;
-		size_t dA = count_diff(s, g_gold[0]), dB = count_diff(s, g_gold[1]);
-		int cls;
-		if (dA == 0) cls = 0;
-		else if (dB == 0) cls = 1;
-		else
+		int frame = r->frameNo, scene = r->lastScene;
+		for (int slot = 0; slot < SLOTS && !r->stop; slot++)
 		{
-			size_t neither = 0, n = s.w.size();
-			for (size_t j = 0; j < n; j++)
-				neither += s.w[j] != g_gold[0].w[j] && s.w[j] != g_gold[1].w[j];
-			cls = neither == 0 ? 2 : 3;
-			if (cls == 3)
+			slot_read(slot, s);
+			size_t dA = slot_diff(s, g_ref[0]), dB = slot_diff(s, g_ref[1]);
+			r->slotReads++;
+			if (dA == 0) { r->asA++; continue; }
+			if (dB == 0) { r->asB++; continue; }
+			usleep(2500);   /* a write may be in progress: look again */
+			slot_read(slot, again);
+			size_t eA = slot_diff(again, g_ref[0]), eB = slot_diff(again, g_ref[1]);
+			if (eA == 0 || eB == 0)
 			{
-				size_t line = g_fb.f.line_length / 4;
-				long minx = 1 << 30, maxx = -1, miny = 1 << 30, maxy = -1;
-				for (size_t j = 0; j < n; j++)
-					if (s.w[j] != g_gold[0].w[j] && s.w[j] != g_gold[1].w[j])
-					{
-						size_t word = j * g_fb.step;
-						long x = (long)(word % line), y = (long)(word / line);
-						if (x < minx) minx = x;
-						if (x > maxx) maxx = x;
-						if (y < miny) miny = y;
-						if (y > maxy) maxy = y;
-					}
-				if (r->anomalies < 40)
-					printf("DISP ANOMALY in '%s' around frame %d (last sent scene %c, before it %c), %.1f ms after that present: %zu samples are neither A nor B; words x %ld..%ld, rows %ld..%ld (diff vs A %zu, vs B %zu)\n",
-					       r->name, frame, 'A' + scene, 'A' + prev, (s.t - lp) / 1000.0, neither, minx, maxx, miny, maxy, dA, dB);
-				save_dump("x", s, (int)r->anomalies);
-				r->anomalies++;
+				r->transient++;
+				continue;
 			}
+			uint32_t h = 2166136261u;
+			for (size_t j = 0; j < again.w.size(); j++)
+				h = (h ^ again.w[j]) * 16777619u;
+			if (h == lastBad[slot])
+				continue;   /* the same bad picture as before */
+			lastBad[slot] = h;
+			/* a picture that is neither: where does it differ from the nearer reference? */
+			const Slot &ref = eA <= eB ? g_ref[0] : g_ref[1];
+			long minx = 1 << 30, maxx = -1, miny = 1 << 30, maxy = -1;
+			for (size_t j = 0; j < again.w.size(); j++)
+				if (again.w[j] != ref.w[j])
+				{
+					long ry = (long)(j / SAMPLES_PER_ROW) * ROW_STEP, px = (long)(j % SAMPLES_PER_ROW) * WORD_STEP * 2;
+					if (px < minx) minx = px;
+					if (px > maxx) maxx = px;
+					if (ry < miny) miny = ry;
+					if (ry > maxy) maxy = ry;
+				}
+			if (r->anomalies < 30)
+				printf("DISP ANOMALY in '%s' near frame %d (last sent scene %c): slot %d is neither A nor B, %zu of %zu samples differ from %c; pixels x %ld..%ld, y %ld..%ld of the slot\n", r->name, frame,
+				       'A' + scene, slot, eA <= eB ? eA : eB, again.w.size(), eA <= eB ? 'A' : 'B', minx, maxx, miny, maxy);
+			save_slot("x", slot, (int)r->anomalies);
+			r->anomalies++;
 		}
-		double age = lp ? (s.t - lp) / 1000.0 : 1e6;
-		int b = 0;
-		while (b < AGE_BUCKETS - 1 && age >= g_ageLimitsMs[b]) b++;
-		r->cnt[b][cls]++;
-		r->reads++;
-		usleep(1500);
+		double ms = (now_us() - t0) / 1000.0;
+		r->scans++;
+		r->scanMs += ms;
+		if (ms > r->scanMax) r->scanMax = ms;
+		usleep(1000);
 	}
 	return NULL;
 }
@@ -417,7 +406,7 @@ static void run_pattern(const Pattern &p, bool withReads)
 	if (abort_requested())
 		return;
 	int frames = getenv("DM_DISPTEST_QUICK") ? p.frames / 8 + 1 : p.frames;
-	printf("DISP == %s: %d frames%s\n", p.name, frames, withReads ? ", with continuous read-back" : ", timing only");
+	printf("DISP == %s: %d frames%s\n", p.name, frames, withReads ? ", with continuous read-back of all slots" : ", timing only");
 	fflush(stdout);
 	Stat present;
 	Reader rd;
@@ -428,7 +417,7 @@ static void run_pattern(const Pattern &p, bool withReads)
 		started = pthread_create(&th, NULL, reader_main, &rd) == 0;
 	uint32_t rnd = 12345;
 	uint64_t t0 = now_us(), next = t0;
-	int scene = 0, prevScene = 0, burst = 0;
+	int scene = 0, burst = 0;
 	for (int i = 0; i < frames && !abort_requested(); i++)
 	{
 		switch (p.kind)
@@ -439,14 +428,10 @@ static void run_pattern(const Pattern &p, bool withReads)
 		}
 		draw_scene(scene);
 		uint64_t ts = now_us();
-		rd.prevScene = prevScene;
 		rd.lastScene = scene;
 		rd.frameNo = i;
 		present_frame();
-		uint64_t te = now_us();
-		rd.lastPresent = te;
-		present.add((te - ts) / 1000.0);
-		prevScene = scene;
+		present.add((now_us() - ts) / 1000.0);
 		switch (p.kind)
 		{
 		case 2:
@@ -461,7 +446,7 @@ static void run_pattern(const Pattern &p, bool withReads)
 		}
 		wait_until(next);
 	}
-	usleep(120000);   /* the last frames get shown */
+	usleep(300000);   /* the last frames get rendered and looked at */
 	if (started)
 	{
 		rd.stop = true;
@@ -471,14 +456,9 @@ static void run_pattern(const Pattern &p, bool withReads)
 	printf("DISP   present() calls: %d, avg %.2f ms, min %.2f, max %.2f, over 5 ms: %d, over 10 ms: %d, over 20 ms: %d; %.1f frames/s\n", present.n, present.n ? present.sum / present.n : 0,
 	       present.n ? present.mn : 0, present.mx, present.over5, present.over10, present.over20, secs > 0 ? present.n / secs : 0);
 	if (started)
-	{
-		printf("DISP   %ld read-backs (a read takes %.1f ms on average, %.1f at most); by time since the last present: shows A | shows B | mix of A and B | NEITHER\n", rd.reads, rd.reads ? rd.readMs / rd.reads : 0, rd.readMax);
-		for (int b = 0; b < AGE_BUCKETS; b++)
-			printf("DISP     age %s%3d ms: %6ld | %6ld | %6ld | %6ld\n", b == AGE_BUCKETS - 1 ? ">= " : "<  ", b == AGE_BUCKETS - 1 ? g_ageLimitsMs[b - 1] : g_ageLimitsMs[b], rd.cnt[b][0], rd.cnt[b][1], rd.cnt[b][2], rd.cnt[b][3]);
-		printf("DISP   %s RESULT: %ld read-backs, %ld anomalous\n", p.name, rd.reads, rd.anomalies);
-	}
-	else
-		printf("DISP   %s RESULT: timing only\n", p.name);
+		printf("DISP   %ld scans of all slots (%.0f ms each, %.0f at most), %ld slot reads: %ld looked like A, %ld like B, %ld were being written (fine on a second look), %ld ANOMALOUS\n", rd.scans,
+		       rd.scans ? rd.scanMs / rd.scans : 0, rd.scanMax, rd.slotReads, rd.asA, rd.asB, rd.transient, rd.anomalies);
+	printf("DISP   %s RESULT: %s\n", p.name, started ? (rd.anomalies ? "ANOMALIES SEEN" : "all slots clean") : "timing only");
 	fflush(stdout);
 }
 
@@ -486,7 +466,7 @@ static void run_series(const char *label, bool withReads)
 {
 	printf("DISP ===== series: %s =====\n", label);
 	fflush(stdout);
-	if (withReads && !capture_golds())
+	if (withReads && !capture_refs())
 		withReads = false;
 	static const Pattern pats[] = {
 		{ "alternate every 25 ms (game pace)", 400, 0, 25000 },
@@ -503,7 +483,7 @@ static void run_series(const char *label, bool withReads)
 int disptest_run()
 {
 	printf("DISP display test starting; Select+Start leaves\n");
-	printf("DISP panel/canvas: our canvas %d x %d\n", SW, SH);
+	printf("DISP our canvas %d x %d\n", SW, SH);
 	fb_probe();
 	if (!load_assets())
 	{
@@ -511,8 +491,7 @@ int disptest_run()
 		fflush(stdout);
 		return 1;
 	}
-	bool anyFb = g_cand[0].ok || g_cand[1].ok || g_cand[2].ok || g_cand[3].ok;
-	printf("DISP read-back is %s\n", anyFb ? "possible (frame buffers mapped)" : "NOT possible (only timing will be measured)");
+	printf("DISP read-back is %s\n", g_fb.ok ? "possible (/dev/fb0 mapped)" : "NOT possible (only timing will be measured)");
 	fflush(stdout);
 	audio_init();
 	bool music = getenv("DM_DISPTEST_NOMUSIC") == NULL;
@@ -525,13 +504,13 @@ int disptest_run()
 			usleep(20000);
 		}
 	}
-	run_series(music ? "music playing" : "no music", anyFb);
+	run_series(music ? "music playing" : "no music", g_fb.ok);
 	if (music && !g_abort)
 	{
 		music_play_folder("");   /* stops the music (no such folder) */
 		music_set_volume(0);
 		usleep(300000);
-		run_series("no music", anyFb);
+		run_series("no music", g_fb.ok);
 	}
 	printf("DISP display test finished\n");
 	fflush(stdout);
