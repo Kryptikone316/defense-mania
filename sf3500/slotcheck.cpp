@@ -110,40 +110,81 @@ void read_slot(int slot, uint32_t *w)
 	}
 }
 
+/* The model is evaluated at the same 7360 sample points every time, so where each one reads the canvas (four pixels and
+ * their weights) is worked out once. Evaluating a frame is then four table reads per sample, in integers. */
+struct Tap
+{
+	uint32_t i00, i10, i01, i11;   /* canvas pixel indexes */
+	uint16_t w00, w10, w01, w11;   /* weights, summing to 256 */
+	uint16_t cell;
+};
+std::vector<Tap> g_taps;           /* sample order: row, word, pixel of the word (0 then 1) */
+int g_cellCount[NCELLS];
+uint8_t g_lut5[32], g_lut6[64];
+
+void build_tables()
+{
+	for (int i = 0; i < 32; i++) g_lut5[i] = (uint8_t)(i * 255 / 31);
+	for (int i = 0; i < 64; i++) g_lut6[i] = (uint8_t)(i * 255 / 63);
+	g_taps.resize((size_t)SAMPLES * 2);
+	memset(g_cellCount, 0, sizeof g_cellCount);
+	size_t t = 0;
+	for (int r = 0; r < SAMPLE_ROWS; r++)
+		for (int k = 0; k < SAMPLE_COLS; k++)
+			for (int sub = 0; sub < 2; sub++, t++)
+			{
+				int xs = k * WORD_STEP * 2 + sub, ys = r * ROW_STEP;
+				float xc = (ys + 0.5f) * g_W / (float)SLOT_H - 0.5f;
+				float yc = (g_H - 1) - ((xs + 1 + 0.5f) * g_H / (float)SLOT_W - 0.5f);
+				if (xc < 0) xc = 0;
+				if (yc < 0) yc = 0;
+				if (xc > g_W - 1) xc = (float)(g_W - 1);
+				if (yc > g_H - 1) yc = (float)(g_H - 1);
+				int x0 = (int)xc, y0 = (int)yc, x1 = x0 + 1 < g_W ? x0 + 1 : x0, y1 = y0 + 1 < g_H ? y0 + 1 : y0;
+				float fx = xc - x0, fy = yc - y0;
+				Tap &p = g_taps[t];
+				p.i00 = (uint32_t)(y0 * g_W + x0);
+				p.i10 = (uint32_t)(y0 * g_W + x1);
+				p.i01 = (uint32_t)(y1 * g_W + x0);
+				p.i11 = (uint32_t)(y1 * g_W + x1);
+				int w00 = (int)((1 - fx) * (1 - fy) * 256 + 0.5f), w10 = (int)(fx * (1 - fy) * 256 + 0.5f), w01 = (int)((1 - fx) * fy * 256 + 0.5f);
+				int w11 = 256 - w00 - w10 - w01;
+				p.w00 = (uint16_t)w00; p.w10 = (uint16_t)w10; p.w01 = (uint16_t)w01; p.w11 = (uint16_t)(w11 < 0 ? 0 : w11);
+				int cx = xs / CELL_W, cy = ys / CELL_H;
+				if (cx >= NCX) cx = NCX - 1;
+				if (cy >= NCY) cy = NCY - 1;
+				p.cell = (uint16_t)(cy * NCX + cx);
+				g_cellCount[p.cell]++;
+			}
+}
+
 /* cell errors of a slot's samples against the model of a frame; returns the mean cell error */
 float eval_slot(const uint32_t *w, const uint16_t *canvas, float cellErr[NCELLS])
 {
-	float sumS[NCELLS][3], sumM[NCELLS][3];
-	int cnt[NCELLS];
+	int sumS[NCELLS][3], sumM[NCELLS][3];
 	memset(sumS, 0, sizeof sumS);
 	memset(sumM, 0, sizeof sumM);
-	memset(cnt, 0, sizeof cnt);
-	for (int r = 0; r < SAMPLE_ROWS; r++)
+	const Tap *tp = g_taps.data();
+	for (int i = 0; i < SAMPLES; i++)
 	{
-		int ys = r * ROW_STEP, cy = ys / CELL_H;
-		if (cy >= NCY) cy = NCY - 1;
-		for (int k = 0; k < SAMPLE_COLS; k++)
+		uint32_t word = w[i];
+		for (int sub = 0; sub < 2; sub++, tp++)
 		{
-			uint32_t word = w[r * SAMPLE_COLS + k];
-			for (int sub = 0; sub < 2; sub++)
-			{
-				int xs = k * WORD_STEP * 2 + sub, cx = xs / CELL_W;
-				if (cx >= NCX) cx = NCX - 1;
-				int c = cy * NCX + cx;
-				float sr, sg, sb, m[3];
-				px565((uint16_t)(word >> (16 * sub)), sr, sg, sb);
-				model_pixel(canvas, (float)xs, (float)ys, m);
-				sumS[c][0] += sr; sumS[c][1] += sg; sumS[c][2] += sb;
-				sumM[c][0] += m[0]; sumM[c][1] += m[1]; sumM[c][2] += m[2];
-				cnt[c]++;
-			}
+			uint32_t v = (word >> (16 * sub)) & 0xFFFF;
+			int c = tp->cell;
+			sumS[c][0] += g_lut5[v >> 11]; sumS[c][1] += g_lut6[(v >> 5) & 63]; sumS[c][2] += g_lut5[v & 31];
+			uint32_t a = canvas[tp->i00], b = canvas[tp->i10], cc = canvas[tp->i01], d = canvas[tp->i11];
+			int r = (g_lut5[a >> 11] * tp->w00 + g_lut5[b >> 11] * tp->w10 + g_lut5[cc >> 11] * tp->w01 + g_lut5[d >> 11] * tp->w11) >> 8;
+			int g = (g_lut6[(a >> 5) & 63] * tp->w00 + g_lut6[(b >> 5) & 63] * tp->w10 + g_lut6[(cc >> 5) & 63] * tp->w01 + g_lut6[(d >> 5) & 63] * tp->w11) >> 8;
+			int bl = (g_lut5[a & 31] * tp->w00 + g_lut5[b & 31] * tp->w10 + g_lut5[cc & 31] * tp->w01 + g_lut5[d & 31] * tp->w11) >> 8;
+			sumM[c][0] += r; sumM[c][1] += g; sumM[c][2] += bl;
 		}
 	}
 	float total = 0;
 	for (int c = 0; c < NCELLS; c++)
 	{
-		if (!cnt[c]) { cellErr[c] = 0; continue; }
-		cellErr[c] = (fabsf(sumS[c][0] - sumM[c][0]) + fabsf(sumS[c][1] - sumM[c][1]) + fabsf(sumS[c][2] - sumM[c][2])) / (3.0f * cnt[c]);
+		if (!g_cellCount[c]) { cellErr[c] = 0; continue; }
+		cellErr[c] = (float)(abs(sumS[c][0] - sumM[c][0]) + abs(sumS[c][1] - sumM[c][1]) + abs(sumS[c][2] - sumM[c][2])) / (3.0f * g_cellCount[c]);
 		total += cellErr[c];
 	}
 	return total / NCELLS;
@@ -205,7 +246,7 @@ int calibrate(float cellErr[NCELLS])
 	{
 		float sum = 0;
 		int used = 0;
-		for (int back = 4; back < 30 && used < 6; back += 3)
+		for (int back = 4; back < 30 && used < 4; back += 5)
 		{
 			if (n < (uint32_t)back + 1) break;
 			const FrameRec *f = frame_at(n - 1 - back);
@@ -226,7 +267,7 @@ int calibrate(float cellErr[NCELLS])
 
 void *reader_main(void *)
 {
-	setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
+	setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 5);
 	std::vector<uint32_t> w(SAMPLES), w2(SAMPLES);
 	float errA[NCELLS], errB[NCELLS], err2[NCELLS];
 	float base[NCELLS];
@@ -237,6 +278,8 @@ void *reader_main(void *)
 	memset(lastRep, 0xFF, sizeof lastRep);
 	Stats st;
 	int unmatchedRun = 0;
+	double calMs = 0, readMs = 0, evalMs = 0;
+	long calibrations = 0, reads = 0, evals = 0, scans = 0;
 	while (!g_stop)
 	{
 		uint32_t n = g_sent;
@@ -248,9 +291,12 @@ void *reader_main(void *)
 		}
 		if (!g_fake && (off < 0 || now - lastCal > 30000000ull || unmatchedRun > 20))
 		{
+			uint64_t c0 = now_us();
 			int o = calibrate(errA);
 			if (o >= 0) off = o;
-			lastCal = now;
+			lastCal = now_us();
+			calMs += (lastCal - c0) / 1000.0;
+			calibrations++;
 			unmatchedRun = 0;
 			if (off < 0) { usleep(200000); continue; }
 		}
@@ -277,13 +323,18 @@ void *reader_main(void *)
 			}
 			if (!found)
 				continue;
+			uint64_t tr0 = now_us();
 			read_slot(p * 2, w.data());
+			readMs += (now_us() - tr0) / 1000.0;
+			reads++;
 			const FrameRec *fa = frame_at(f);
 			const FrameRec *fb = frame_at(f + PAIRS);   /* the slot may already hold the next frame of its turn */
 			const FrameRec *fo = f >= (uint32_t)PAIRS ? frame_at(f - PAIRS) : NULL;   /* or still the previous one, if the driver is late */
 			if (!fa)
 				continue;
+			uint64_t te0 = now_us();
 			float ma = eval_slot(w.data(), fa->px, errA), mb = 1e30f, mo = 1e30f;
+			evals++;
 			uint32_t chosen = f;
 			float *err = errA;
 			float mean = ma;
@@ -301,6 +352,7 @@ void *reader_main(void *)
 					continue;
 				}
 			}
+			evalMs += (now_us() - te0) / 1000.0;
 			st.checks++;
 			if (mean > 30)
 			{
@@ -329,11 +381,31 @@ void *reader_main(void *)
 				/* a write in progress, or real? look again */
 				usleep(g_rereadUs);
 				read_slot(p * 2, w2.data());
-				const FrameRec *fc = frame_at(chosen);
 				st.rereads++;
+				/* the slot may have been rewritten in the meantime: pick the matching frame again */
+				uint32_t chosen2 = chosen;
+				const FrameRec *fc = NULL;
+				{
+					float bestMean = 1e30f;
+					uint32_t cands[3] = { f, f + PAIRS, f >= (uint32_t)PAIRS ? f - PAIRS : 0xFFFFFFFFu };
+					for (int ci = 0; ci < 3; ci++)
+					{
+						const FrameRec *cf = cands[ci] == 0xFFFFFFFFu ? NULL : frame_at(cands[ci]);
+						if (!cf) continue;
+						float m2 = eval_slot(w2.data(), cf->px, ci == 0 ? err2 : errB);
+						if (m2 < bestMean)
+						{
+							bestMean = m2;
+							chosen2 = cands[ci];
+							fc = cf;
+						}
+					}
+					if (fc)
+						eval_slot(w2.data(), fc->px, err2);
+				}
+				chosen = chosen2;
 				if (fc)
 				{
-					eval_slot(w2.data(), fc->px, err2);
 					int still = 0, worst = -1;
 					for (int c = 0; c < NCELLS; c++)
 						if (err2[c] > base[c] + 22 && err2[c] > 30)
@@ -362,6 +434,7 @@ void *reader_main(void *)
 			for (int c = 0; c < NCELLS; c++)
 				base[c] = base[c] * 0.97f + err[c] * 0.03f;
 		}
+		scans++;
 		if (now_us() - lastStatus > 30000000ull)
 		{
 			lastStatus = now_us();
@@ -375,7 +448,7 @@ void *reader_main(void *)
 				if (!p95 && acc * 100 >= total * 95) p95 = i * 2;
 				if (!p99 && acc * 100 >= total * 99) p99 = i * 2;
 			}
-			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99);
+			printf("SLOTCHECK status: %u frames sent, %ld slot checks, %ld not rendered yet, %ld unmatched, %ld re-reads, %ld anomalies; cell error p50 %d, p95 %d, p99 %d; %ld scans, %ld calibrations (%.0f ms each), a slot read takes %.1f ms and its checks %.1f ms\n", (unsigned)g_sent, st.checks, st.pending, st.unmatched, st.rereads, st.anomalies, p50, p95, p99, scans, calibrations, calibrations ? calMs / calibrations : 0.0, reads ? readMs / reads : 0.0, st.checks ? evalMs / st.checks : 0.0);
 			fflush(stdout);
 		}
 		usleep(40000);
@@ -444,6 +517,7 @@ bool slotcheck_start()
 	}
 	g_W = SW;
 	g_H = SH;
+	build_tables();
 	for (int i = 0; i < RING; i++)
 	{
 		g_fr[i].px = (uint16_t *)malloc((size_t)g_W * g_H * 2);
