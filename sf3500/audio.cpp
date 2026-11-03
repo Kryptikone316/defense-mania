@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <time.h>
 #include <map>
 #include <vector>
@@ -53,8 +54,41 @@ static int fill(void *, int16_t *dst, int frames)
 	return got;
 }
 
+/* Opening an Ogg file (reading it and building the decoder's tables) takes a good fraction of a second on this CPU.
+ * It is done on a thread of its own so the game does not stop for it; music_update() picks the result up. */
+static pthread_t g_loadThread;
+static volatile int g_loadState;   /* 0 idle, 1 loading, 2 done */
+static bool g_loadThreaded;
+static std::string g_loadPath;
+static stb_vorbis *g_loaded;
+static int g_loadErr;
+
+static void *load_main(void *)
+{
+	int err = 0;
+	g_loaded = stb_vorbis_open_filename(g_loadPath.c_str(), &err, NULL);
+	g_loadErr = err;
+	__sync_synchronize();
+	g_loadState = 2;
+	return NULL;
+}
+
+static void cancel_load()
+{
+	if (g_loadState == 0)
+		return;
+	if (g_loadThreaded)
+		pthread_join(g_loadThread, NULL);
+	g_loadThreaded = false;
+	if (g_loaded)
+		stb_vorbis_close(g_loaded);
+	g_loaded = NULL;
+	g_loadState = 0;
+}
+
 static void drop()
 {
+	cancel_load();
 	if (g_voice)
 	{
 		sf3500_voice_destroy(g_voice);
@@ -69,20 +103,43 @@ static void drop()
 
 static float gain() { return g_master / 100.0f * g_volume / 100.0f * 0.9f * g_currentGain; }
 
-static void start_track(const std::string &path)
+static void begin_load(const std::string &path)
 {
 	drop();
-	int err = 0;
-	g_vorbis = stb_vorbis_open_filename(path.c_str(), &err, NULL);
+	g_loadPath = path;
+	g_loaded = NULL;
+	g_loadState = 1;
+	g_loadThreaded = pthread_create(&g_loadThread, NULL, load_main, NULL) == 0;
+	if (!g_loadThreaded)
+		load_main(NULL);   /* no thread to be had: do it here, as before */
+}
+
+/* the track has been opened: start playing it */
+static void finish_load()
+{
+	if (g_loadThreaded)
+		pthread_join(g_loadThread, NULL);
+	g_loadThreaded = false;
+	g_vorbis = g_loaded;
+	g_loaded = NULL;
+	g_loadState = 0;
+	const std::string &path = g_loadPath;
 	if (!g_vorbis)
 	{
-		printf("music: cannot decode %s (error %d)\n", path.c_str(), err);
+		printf("music: cannot decode %s (error %d)\n", path.c_str(), g_loadErr);
 		fflush(stdout);
 		return;
 	}
 	stb_vorbis_info info = stb_vorbis_get_info(g_vorbis);
 	g_channels = info.channels;
 	g_rate = (int)info.sample_rate;
+	if (!g_ok)   /* test hook (no sound in the emulator): only show that the loader worked */
+	{
+		printf("music test: opened %s, %d channels\n", path.c_str(), g_channels);
+		fflush(stdout);
+		drop();
+		return;
+	}
 	std::map<std::string, float>::const_iterator gi = g_trackGain.find(path.substr(6));   /* after "music/" */
 	g_currentGain = gi == g_trackGain.end() ? 1.0f : gi->second;
 	g_voice = sf3500_voice_create_stream(fill, NULL, g_rate, g_channels);
@@ -99,6 +156,8 @@ static void start_track(const std::string &path)
 	printf("music: %s (%.1f dB)\n", path.c_str(), 20 * log10f(g_currentGain));
 	fflush(stdout);
 }
+
+static void start_track(const std::string &path) { begin_load(path); }
 
 static void pick_and_play()
 {
@@ -177,7 +236,7 @@ void audio_shutdown()
 
 void music_play_folder(const std::string &folder)
 {
-	if (!g_ok || folder == g_folder)
+	if ((!g_ok && !getenv("DM_MUSICTEST")) || folder == g_folder)
 		return;
 	g_folder = folder;
 	drop();
@@ -187,9 +246,11 @@ void music_play_folder(const std::string &folder)
 
 void music_update()
 {
-	if (!g_ok)
+	if (!g_ok && !getenv("DM_MUSICTEST"))
 		return;
-	if (g_enabled && g_vorbis && g_voice && !sf3500_voice_playing(g_voice))
+	if (g_loadState == 2)
+		finish_load();
+	else if (g_enabled && g_vorbis && g_voice && !sf3500_voice_playing(g_voice))
 		pick_and_play();
 	if (g_enabled && g_audioSeconds >= 60 && millis() - g_logStamp > 1000)
 	{

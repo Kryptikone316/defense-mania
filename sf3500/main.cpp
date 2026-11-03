@@ -1125,10 +1125,11 @@ int main()
 		float dt = (float)(now - lastFrame);
 		lastFrame = now;
 		static int hitches;
-		if (dt > 250 && screen == S_GAME && hitches < 20)   /* a pause in the frames, noted in log.txt */
+		static int partsPlay, partsMusic, partsPresent;   /* where the last frame spent its time */
+		if (dt > 80 && screen == S_GAME && hitches < 30)   /* a pause in the frames, noted in log.txt */
 		{
 			hitches++;
-			printf("frame hitch: %.0f ms\n", dt);
+			printf("frame hitch: %.0f ms (the frame before spent %d ms in the game, %d ms in the music, %d ms presenting)\n", dt, partsPlay, partsMusic, partsPresent);
 			fflush(stdout);
 		}
 		padPrev = padNow;
@@ -1145,6 +1146,7 @@ int main()
 		}
 		Screen next = screen;
 		g_screenNow = screen;
+		uint32_t tA = millis();
 		if (play.map) snprintf(g_mapNow, sizeof g_mapNow, "%s", maps[lastMap].name.c_str());
 		switch (screen)
 		{
@@ -1304,6 +1306,7 @@ int main()
 			break;
 		default: break;
 		}
+		uint32_t tB = millis();
 		if (next != screen)
 			padPrev = padNow;   /* a press that changed the screen does not also act on the next one */
 		screen = next;
@@ -1313,7 +1316,9 @@ int main()
 			snprintf(b, sizeof b, "%dx%d @ %d fps", SW, SH, fps);
 			draw_text(b, SW - 70, 3, 11, 0xFFFFFF, ALIGN_RIGHT, 2, 255, 0x000000);   /* left of TreeFrogUI's battery icon */
 		}
+		uint32_t tC = millis();
 		music_update();
+		uint32_t tD = millis();
 		fpsFrames++;
 		if (millis() - fpsStamp >= 1000)
 		{
@@ -1322,6 +1327,9 @@ int main()
 			fpsStamp = millis();
 		}
 		gfx_present();
+		partsPlay = (int)(tB - tA);
+		partsMusic = (int)(tD - tC);
+		partsPresent = (int)(millis() - tD);
 		uint32_t spent = millis() - now;
 		if (spent < 25)
 			SDL_Delay(25 - spent);
