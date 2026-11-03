@@ -17,6 +17,8 @@
 
 int SW = 640, SH = 358;
 static uint16_t *fb;
+static uint16_t *fbRing[3];   /* frames are drawn into these in turn: the driver may still be reading the last one */
+static int fbCount = 3, fbCur;
 
 uint32_t millis() { return SDL_GetTicks(); }
 
@@ -188,24 +190,28 @@ static void dump_frame(int frame)
  * and put them back, so the match goes on and the report shows what was overwritten. */
 static void check_canvas()
 {
-	static uint16_t *fbGood;
+	static uint16_t *good[3];
 	static int swGood, shGood;
-	if (!fbGood)
+	if (!good[0])
 	{
-		fbGood = fb;
+		for (int i = 0; i < 3; i++) good[i] = fbRing[i];
 		swGood = SW;
 		shGood = SH;
 		return;
 	}
-	if (fb != fbGood || SW != swGood || SH != shGood)
+	bool bad = fb != good[fbCur] || SW != swGood || SH != shGood;
+	for (int i = 0; i < fbCount; i++)
+		if (fbRing[i] != good[i]) bad = true;
+	if (bad)
 	{
 		static int told;
 		if (told++ < 3)
 		{
-			printf("memory overwritten: canvas %p %dx%d should be %p %dx%d\n", (void *)fb, SW, SH, (void *)fbGood, swGood, shGood);
+			printf("memory overwritten: canvas %p %dx%d should be %p %dx%d\n", (void *)fb, SW, SH, (void *)good[fbCur], swGood, shGood);
 			fflush(stdout);
 		}
-		fb = fbGood;
+		for (int i = 0; i < 3; i++) fbRing[i] = good[i];
+		fb = good[fbCur];
 		SW = swGood;
 		SH = shGood;
 	}
@@ -222,6 +228,11 @@ void gfx_present()
 	else
 		dump_frame(frame);
 	frame++;
+	if (fbCount > 1)   /* the next frame goes into another buffer */
+	{
+		fbCur = (fbCur + 1) % fbCount;
+		fb = fbRing[fbCur];
+	}
 }
 
 bool gfx_init()
@@ -262,10 +273,15 @@ bool gfx_init()
 	}
 	SW &= ~1;
 	SH &= ~1;
-	fb = (uint16_t *)calloc((size_t)SW * SH, sizeof(uint16_t));
 	cfg_load();
 	grade_set_map("");
-	return fb != NULL;
+	fbCount = (int)cfg_num("frame_buffers", 3);
+	if (fbCount < 1) fbCount = 1;
+	if (fbCount > 3) fbCount = 3;
+	for (int i = 0; i < 3; i++)
+		fbRing[i] = (uint16_t *)calloc((size_t)SW * SH, sizeof(uint16_t));
+	fb = fbRing[0];
+	return fbRing[0] && fbRing[1] && fbRing[2];
 }
 
 /* ------------------------------------------------------------------ images */

@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <time.h>
 #include <map>
 #include <vector>
@@ -63,8 +66,10 @@ static std::string g_loadPath;
 static stb_vorbis *g_loaded;
 static int g_loadErr;
 
-static void *load_main(void *)
+static void *load_main(void *onThread)
 {
+	if (onThread)   /* the game and the display come first */
+		setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
 	int err = 0;
 	g_loaded = stb_vorbis_open_filename(g_loadPath.c_str(), &err, NULL);
 	g_loadErr = err;
@@ -109,7 +114,7 @@ static void begin_load(const std::string &path)
 	g_loadPath = path;
 	g_loaded = NULL;
 	g_loadState = 1;
-	g_loadThreaded = pthread_create(&g_loadThread, NULL, load_main, NULL) == 0;
+	g_loadThreaded = pthread_create(&g_loadThread, NULL, load_main, (void *)1) == 0;
 	if (!g_loadThreaded)
 		load_main(NULL);   /* no thread to be had: do it here, as before */
 }
