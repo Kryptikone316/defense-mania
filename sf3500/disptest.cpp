@@ -252,13 +252,13 @@ static void draw_scene(int which)
 }
 
 /* ------------------------------------------------------------------ the references */
-static Slot g_ref[2];
+static Slot g_ref[2][2];   /* [column (slot parity)][scene]: the two columns are rendered differently */
 static bool g_haveRef;
 static int g_dumps;
 
 static void save_slot(const char *tag, int slot, int idx)
 {
-	if (g_dumps >= 8)
+	if (g_dumps >= 24)
 		return;
 	g_dumps++;
 	char name[96];
@@ -291,23 +291,26 @@ static bool capture_refs()
 	for (int w = 0; w < 2; w++)
 	{
 		settle(w);
-		Slot first, other;
-		slot_read(0, first);
-		int same = 0;
-		size_t worst = 0;
-		for (int s = 0; s < SLOTS; s++)
+		for (int col = 0; col < 2; col++)
 		{
-			slot_read(s, other);
-			size_t d = slot_diff(first, other);
-			same += d == 0;
-			if (d > worst) worst = d;
+			Slot first, other;
+			slot_read(col, first);
+			int same = 0;
+			size_t worst = 0;
+			for (int s = col; s < SLOTS; s += 2)
+			{
+				slot_read(s, other);
+				size_t d = slot_diff(first, other);
+				same += d == 0;
+				if (d > worst) worst = d;
+			}
+			printf("DISP reference %c, %s column: %d of %d slots identical to slot %d (worst slot differs in %zu of %zu samples)\n", 'A' + w, col ? "right" : "left", same, SLOTS / 2, col, worst, first.w.size());
+			g_ref[col][w] = first;
 		}
-		printf("DISP reference %c: %d of %d slots are identical to slot 0 (worst slot differs in %zu of %zu samples)\n", 'A' + w, same, SLOTS, worst, first.w.size());
-		g_ref[w] = first;
 	}
-	size_t ab = slot_diff(g_ref[0], g_ref[1]);
-	printf("DISP scene A and scene B differ in %zu of %zu samples of a slot%s\n", ab, g_ref[0].w.size(), ab == 0 ? "  -> the slots do not show the difference: no read-back possible" : "");
-	g_haveRef = ab > 0;
+	size_t abL = slot_diff(g_ref[0][0], g_ref[0][1]), abR = slot_diff(g_ref[1][0], g_ref[1][1]);
+	printf("DISP scene A and B differ in %zu (left column) and %zu (right column) of %zu samples of a slot%s\n", abL, abR, g_ref[0][0].w.size(), abL == 0 ? "  -> the slots do not show the difference: no read-back possible" : "");
+	g_haveRef = abL > 0;
 	fflush(stdout);
 	return g_haveRef;
 }
@@ -339,58 +342,114 @@ struct Reader
 {
 	volatile bool stop = false;
 	volatile int frameNo = 0, lastScene = 0;
-	long slotReads = 0, asA = 0, asB = 0, transient = 0, anomalies = 0, scans = 0;
+	long slotReads = 0, asA[2] = {}, asB[2] = {}, torn[2] = {}, anomalies[2] = {}, scans = 0;
+	long variants[2] = {};   /* distinct pictures that were neither reference (and not a mix of them) */
 	double scanMs = 0, scanMax = 0;
 	const char *name = "";
 };
+
+/* per-sample comparison of a slot with its column's two references */
+static void compare_refs(const Slot &s, int col, size_t &dA, size_t &dB, size_t &neither)
+{
+	dA = dB = neither = 0;
+	for (size_t j = 0; j < s.w.size(); j++)
+	{
+		bool a = s.w[j] == g_ref[col][0].w[j], b = s.w[j] == g_ref[col][1].w[j];
+		dA += !a;
+		dB += !b;
+		neither += !a && !b;
+	}
+}
 
 static void *reader_main(void *arg)
 {
 	Reader *r = (Reader *)arg;
 	Slot s, again;
-	uint32_t lastBad[SLOTS] = {};   /* hash of the bad picture last reported per slot: a bad slot stays bad until it is overwritten */
+	uint32_t lastBad[SLOTS] = {};   /* hash of the odd picture last reported per slot: it stays until the slot is overwritten */
+	int dumpsHere[2] = { 0, 0 };
+	/* what is in the ring when this pattern starts is not news */
+	for (int slot = 0; slot < SLOTS; slot++)
+	{
+		slot_read(slot, s);
+		uint32_t h = 2166136261u;
+		for (size_t j = 0; j < s.w.size(); j++)
+			h = (h ^ s.w[j]) * 16777619u;
+		lastBad[slot] = h;
+	}
 	while (!r->stop)
 	{
 		uint64_t t0 = now_us();
 		int frame = r->frameNo, scene = r->lastScene;
 		for (int slot = 0; slot < SLOTS && !r->stop; slot++)
 		{
+			int col = slot & 1;
 			slot_read(slot, s);
-			size_t dA = slot_diff(s, g_ref[0]), dB = slot_diff(s, g_ref[1]);
+			size_t dA, dB, nei;
+			compare_refs(s, col, dA, dB, nei);
 			r->slotReads++;
-			if (dA == 0) { r->asA++; continue; }
-			if (dB == 0) { r->asB++; continue; }
+			if (dA == 0) { r->asA[col]++; continue; }
+			if (dB == 0) { r->asB[col]++; continue; }
+			if (nei == 0) { r->torn[col]++; continue; }   /* every sample is A's or B's: a frame being written over another */
 			usleep(2500);   /* a write may be in progress: look again */
 			slot_read(slot, again);
-			size_t eA = slot_diff(again, g_ref[0]), eB = slot_diff(again, g_ref[1]);
-			if (eA == 0 || eB == 0)
+			compare_refs(again, col, dA, dB, nei);
+			if (dA == 0 || dB == 0 || nei == 0)
 			{
-				r->transient++;
+				r->torn[col]++;
 				continue;
 			}
 			uint32_t h = 2166136261u;
 			for (size_t j = 0; j < again.w.size(); j++)
 				h = (h ^ again.w[j]) * 16777619u;
 			if (h == lastBad[slot])
-				continue;   /* the same bad picture as before */
+				continue;   /* the same picture as already reported for this slot */
 			lastBad[slot] = h;
-			/* a picture that is neither: where does it differ from the nearer reference? */
-			const Slot &ref = eA <= eB ? g_ref[0] : g_ref[1];
+			r->variants[col]++;
+			/* how far off, and where: small differences (every colour channel within 12) are a filter's doing,
+			 * big ones are a displaced or missing piece */
+			const Slot &ref = dA <= dB ? g_ref[col][0] : g_ref[col][1];
+			size_t small = 0, big = 0;
 			long minx = 1 << 30, maxx = -1, miny = 1 << 30, maxy = -1;
 			for (size_t j = 0; j < again.w.size(); j++)
-				if (again.w[j] != ref.w[j])
+			{
+				uint32_t a = again.w[j], b = ref.w[j];
+				if (a == b)
+					continue;
+				int worst = 0;
+				for (int px = 0; px < 2; px++)
 				{
-					long ry = (long)(j / SAMPLES_PER_ROW) * ROW_STEP, px = (long)(j % SAMPLES_PER_ROW) * WORD_STEP * 2;
-					if (px < minx) minx = px;
-					if (px > maxx) maxx = px;
-					if (ry < miny) miny = ry;
-					if (ry > maxy) maxy = ry;
+					uint16_t pa = (uint16_t)(a >> (16 * px)), pb = (uint16_t)(b >> (16 * px));
+					int d1 = abs(((pa >> 11) & 31) - ((pb >> 11) & 31)) * 8, d2 = abs(((pa >> 5) & 63) - ((pb >> 5) & 63)) * 4, d3 = abs((pa & 31) - (pb & 31)) * 8;
+					int m = d1 > d2 ? d1 : d2;
+					if (d3 > m) m = d3;
+					if (m > worst) worst = m;
 				}
-			if (r->anomalies < 30)
-				printf("DISP ANOMALY in '%s' near frame %d (last sent scene %c): slot %d is neither A nor B, %zu of %zu samples differ from %c; pixels x %ld..%ld, y %ld..%ld of the slot\n", r->name, frame,
-				       'A' + scene, slot, eA <= eB ? eA : eB, again.w.size(), eA <= eB ? 'A' : 'B', minx, maxx, miny, maxy);
-			save_slot("x", slot, (int)r->anomalies);
-			r->anomalies++;
+				if (worst <= 12)
+				{
+					small++;
+					continue;
+				}
+				big++;
+				long ry = (long)(j / SAMPLES_PER_ROW) * ROW_STEP, px = (long)(j % SAMPLES_PER_ROW) * WORD_STEP * 2;
+				if (px < minx) minx = px;
+				if (px > maxx) maxx = px;
+				if (ry < miny) miny = ry;
+				if (ry > maxy) maxy = ry;
+			}
+			if (r->variants[col] <= 12 || big > 0)
+				printf("DISP %s in '%s' near frame %d (last sent scene %c): %s slot %d is neither A nor B: %zu small and %zu big differences from %c of %zu samples%s", big ? "ANOMALY" : "variant", r->name, frame,
+				       'A' + scene, col ? "RIGHT" : "left", slot, small, big, dA <= dB ? 'A' : 'B', again.w.size(), big ? "" : "\n");
+			if (big)
+				printf("; big ones at pixels x %ld..%ld, y %ld..%ld of the slot\n", minx, maxx, miny, maxy);
+			if (big)
+			{
+				r->anomalies[col]++;
+				if (dumpsHere[col] < 2)
+				{
+					dumpsHere[col]++;
+					save_slot(col ? "right" : "left", slot, (int)(g_dumps));
+				}
+			}
 		}
 		double ms = (now_us() - t0) / 1000.0;
 		r->scans++;
@@ -456,9 +515,13 @@ static void run_pattern(const Pattern &p, bool withReads)
 	printf("DISP   present() calls: %d, avg %.2f ms, min %.2f, max %.2f, over 5 ms: %d, over 10 ms: %d, over 20 ms: %d; %.1f frames/s\n", present.n, present.n ? present.sum / present.n : 0,
 	       present.n ? present.mn : 0, present.mx, present.over5, present.over10, present.over20, secs > 0 ? present.n / secs : 0);
 	if (started)
-		printf("DISP   %ld scans of all slots (%.0f ms each, %.0f at most), %ld slot reads: %ld looked like A, %ld like B, %ld were being written (fine on a second look), %ld ANOMALOUS\n", rd.scans,
-		       rd.scans ? rd.scanMs / rd.scans : 0, rd.scanMax, rd.slotReads, rd.asA, rd.asB, rd.transient, rd.anomalies);
-	printf("DISP   %s RESULT: %s\n", p.name, started ? (rd.anomalies ? "ANOMALIES SEEN" : "all slots clean") : "timing only");
+	{
+		printf("DISP   %ld scans of all slots (%.0f ms each, %.0f at most), %ld slot reads\n", rd.scans, rd.scans ? rd.scanMs / rd.scans : 0, rd.scanMax, rd.slotReads);
+		for (int c = 0; c < 2; c++)
+			printf("DISP   %s column: %ld looked like A, %ld like B, %ld were a mix of the two (a write in progress), %ld other pictures seen of which %ld with BIG differences (anomalies)\n", c ? "right" : "left ", rd.asA[c], rd.asB[c],
+			       rd.torn[c], rd.variants[c], rd.anomalies[c]);
+	}
+	printf("DISP   %s RESULT: left column %s, right column %s\n", p.name, started ? (rd.anomalies[0] ? "ANOMALIES" : "clean") : "timing only", started ? (rd.anomalies[1] ? "ANOMALIES" : (rd.variants[1] ? "varies (small differences only)" : "clean")) : "timing only");
 	fflush(stdout);
 }
 
