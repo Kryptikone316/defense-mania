@@ -50,6 +50,10 @@ static void cfg_load()
 
 double cfg_num(const char *key, double def)
 {
+	char envName[80];   /* DMCFG_<key> overrides the file: the display test compares settings in one run */
+	snprintf(envName, sizeof envName, "DMCFG_%s", key);
+	if (const char *ev = getenv(envName))
+		return atof(ev);
 	std::map<std::string, double>::const_iterator it = g_cfg.find(key);
 	return it == g_cfg.end() ? def : it->second;
 }

@@ -1082,11 +1082,20 @@ static void crash_report_install()
 }
 
 /* ------------------------------------------------------------------ main */
+int disptest_run();   /* disptest.cpp */
+
 int main()
 {
 	crash_report_install();
 	if (!gfx_init())
 		return 1;
+	if (getenv("DM_DISPTEST"))   /* the display test of DefensemaniaDbg: no game, only frames sent to the driver and read back */
+	{
+		int rc = disptest_run();
+		hwdisp_deinit();
+		SDL_Quit();
+		return rc;
+	}
 	load_image("data/logo_dm.png", logo);
 	load_image("data/repair_icon.png", repairIcon);
 	load_image("data/update_icon.png", updateIcon);
