@@ -900,6 +900,8 @@ static void play_input(Play &p, float dtMs)
 		}
 		return;
 	}
+	if (pressed(JK_Y))
+		slotcheck_mark();   /* only does anything with slot_check = 1: saves the driver's frame ring right now */
 	if (pressed(JK_START))
 	{
 		m->pause = !m->pause;

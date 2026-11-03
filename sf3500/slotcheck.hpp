@@ -8,6 +8,7 @@
 bool slotcheck_start();                                      /* maps /dev/fb0 and starts the reader thread; false when off or not possible */
 void slotcheck_frame(const uint16_t *canvas, int w, int h);  /* every frame, just before it goes to the driver */
 void slotcheck_after_present(const uint16_t *canvas, int w, int h);   /* right after: only used by the emulator's fake display */
+void slotcheck_mark();                                       /* the player saw something: save the driver's whole frame ring and the frames behind it */
 void slotcheck_stop();
 
 #endif

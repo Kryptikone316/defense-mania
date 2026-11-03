@@ -59,6 +59,7 @@ size_t g_len = 0, g_line = 2560;
 pthread_t g_th;
 bool g_threadOn = false;
 volatile bool g_stop = false;
+volatile int g_offPub = -1;   /* the calibrated ring offset, for the mark files */
 
 uint64_t now_us()
 {
@@ -299,7 +300,7 @@ void *reader_main(void *)
 		{
 			uint64_t c0 = now_us();
 			int o = calibrate(errA);
-			if (o >= 0) off = o;
+			if (o >= 0) { off = o; g_offPub = o; }
 			lastCal = now_us();
 			calMs += (lastCal - c0) / 1000.0;
 			calibrations++;
@@ -617,6 +618,9 @@ void slotcheck_frame(const uint16_t *canvas, int w, int h)
 	r.t = now_us();
 	__sync_synchronize();
 	g_sent = n + 1;
+	static long markAt = getenv("DM_SLOTCHECK_MARK_AT") ? atol(getenv("DM_SLOTCHECK_MARK_AT")) : -1;   /* test hook */
+	if (markAt >= 0 && (long)g_sent == markAt)
+		slotcheck_mark();
 }
 
 void slotcheck_after_present(const uint16_t *canvas, int w, int h)
@@ -640,6 +644,138 @@ void slotcheck_after_present(const uint16_t *canvas, int w, int h)
 			memcpy(&tmp[(size_t)(100 + y) * SLOT_W + 420], &tmp[(size_t)(20 + y) * SLOT_W + 60], 100 * 2);
 	for (int y = 0; y < SLOT_H; y++)   /* written in one go, as the real engine does */
 		memcpy(base + (size_t)(pair * SLOT_H + y) * g_line, &tmp[(size_t)y * SLOT_W], (size_t)SLOT_W * 2);
+}
+
+
+namespace {
+
+const int MARK_FRAMES = 24, MARK_MAX = 3;
+int g_marks = 0;
+volatile int g_markBusy = 0;
+
+struct MarkJob
+{
+	int idx;
+	uint8_t *ring;
+	size_t ringLen;
+	uint16_t *frames;
+	int count;
+	uint32_t num[MARK_FRAMES];
+	double ageMs[MARK_FRAMES];
+	uint8_t *panel;
+	size_t panelLen;
+	double t;
+	uint32_t sent;
+	int off;
+};
+
+void write_file(const char *name, const void *data, size_t len)
+{
+	FILE *o = fopen(name, "wb");
+	if (!o)
+		return;
+	fwrite(data, 1, len, o);
+	fclose(o);
+}
+
+void *mark_writer(void *arg)
+{
+	MarkJob *j = (MarkJob *)arg;
+	char name[96];
+	snprintf(name, sizeof name, "mark_%d_ring.raw", j->idx);
+	write_file(name, j->ring, j->ringLen);
+	snprintf(name, sizeof name, "mark_%d_frames.raw", j->idx);
+	write_file(name, j->frames, (size_t)j->count * g_W * g_H * 2);
+	if (j->panel)
+	{
+		snprintf(name, sizeof name, "mark_%d_panel.raw", j->idx);
+		write_file(name, j->panel, j->panelLen);
+	}
+	snprintf(name, sizeof name, "mark_%d_info.txt", j->idx);
+	FILE *o = fopen(name, "w");
+	if (o)
+	{
+		fprintf(o, "mark %d at t=%.2f s, frames sent so far %u, calibrated ring offset %d\n", j->idx, j->t, j->sent, j->off);
+		fprintf(o, "mark_%d_ring.raw: the driver's frame ring as it was: %zu bytes, rows of %zu bytes (1280 px, 16 bit), 4320 rows = 18 rows of slot pairs (240 rows each), left slot at x 0, right slot at x 640\n", j->idx, j->ringLen, g_line);
+		fprintf(o, "mark_%d_frames.raw: %d frames we sent, %d x %d, 16 bit, newest first; numbers and age at the mark:\n", j->idx, j->count, g_W, g_H);
+		for (int i = 0; i < j->count; i++)
+			fprintf(o, "  %d: frame %u, sent %.0f ms before the mark\n", i, j->num[i], j->ageMs[i]);
+		if (j->panel)
+			fprintf(o, "mark_%d_panel.raw: /dev/fb1 as read at the mark, %zu bytes (480 x 854, 32 bit)\n", j->idx, j->panelLen);
+		fclose(o);
+	}
+	printf("SLOTCHECK mark %d written (%.1f MB)\n", j->idx, ((double)j->ringLen + (double)j->count * g_W * g_H * 2 + (double)j->panelLen) / 1048576.0);
+	fflush(stdout);
+	free(j->ring);
+	free(j->frames);
+	free(j->panel);
+	free(j);
+	g_markBusy = 0;
+	return NULL;
+}
+
+}   // namespace
+
+void slotcheck_mark()
+{
+	if (!g_on || g_markBusy || g_marks >= MARK_MAX || !g_map)
+		return;
+	MarkJob *j = (MarkJob *)calloc(1, sizeof(MarkJob));
+	if (!j)
+		return;
+	j->ringLen = g_line * 4320;
+	if (j->ringLen > g_len)
+		j->ringLen = g_len;
+	j->ring = (uint8_t *)malloc(j->ringLen);
+	j->frames = (uint16_t *)malloc((size_t)MARK_FRAMES * g_W * g_H * 2);
+	if (!j->ring || !j->frames)
+	{
+		free(j->ring); free(j->frames); free(j);
+		return;
+	}
+	uint64_t t0 = now_us();
+	memcpy(j->ring, g_map, j->ringLen);   /* first: the ring keeps turning */
+	j->sent = g_sent;
+	for (uint32_t k = 1; k <= (uint32_t)MARK_FRAMES + 8 && j->count < MARK_FRAMES && k <= j->sent; k++)
+	{
+		const FrameRec *f = frame_at(j->sent - k);
+		if (!f)
+			continue;
+		memcpy(j->frames + (size_t)j->count * g_W * g_H, f->px, (size_t)g_W * g_H * 2);
+		j->num[j->count] = f->n;
+		j->ageMs[j->count] = (t0 - f->t) / 1000.0;
+		j->count++;
+	}
+	if (!g_fake)
+	{
+		int fd = open("/dev/fb1", O_RDONLY);
+		if (fd >= 0)
+		{
+			size_t want = 480u * 854u * 4u;
+			j->panel = (uint8_t *)malloc(want);
+			if (j->panel)
+			{
+				ssize_t r = pread(fd, j->panel, want, 0);
+				if (r > 0) j->panelLen = (size_t)r;
+				else { free(j->panel); j->panel = NULL; }
+			}
+			close(fd);
+		}
+	}
+	j->t = since_start();
+	j->off = g_offPub;
+	j->idx = g_marks++;
+	g_markBusy = 1;
+	printf("SLOTCHECK MARK %d at t=%.1f s, frame %u (the ring and %d frames copied in %.0f ms; writing them now)\n", j->idx, j->t, j->sent, j->count, (now_us() - t0) / 1000.0);
+	fflush(stdout);
+	pthread_t th;
+	if (pthread_create(&th, NULL, mark_writer, j) == 0)
+		pthread_detach(th);
+	else
+	{
+		free(j->ring); free(j->frames); free(j->panel); free(j);
+		g_markBusy = 0;
+	}
 }
 
 void slotcheck_stop()
