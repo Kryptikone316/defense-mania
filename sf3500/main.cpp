@@ -1024,6 +1024,9 @@ static void crash_report(int sig, siginfo_t *si, void *ctx)
 	unsigned long pc = (unsigned long)uc->uc_mcontext.pc, ra = (unsigned long)uc->uc_mcontext.gregs[31];
 	unsigned long sp = (unsigned long)uc->uc_mcontext.gregs[29];
 	fprintf(stderr, "CRASH signal %d at address %p, pc %lx, ra %lx, sp %lx, base %lx, screen %d, map '%s'\n", sig, si->si_addr, pc, ra, sp, (unsigned long)&__executable_start, (int)g_screenNow, g_mapNow);
+	unsigned long cv[3];
+	gfx_canvas_info(cv);
+	fprintf(stderr, "CRASH canvas %lx %lux%lu\n", cv[0], cv[1], cv[2]);
 	fprintf(stderr, "CRASH stack:");
 	int shown = 0;
 	for (unsigned long a = sp; a < sp + 4096 && shown < 40; a += 4)
@@ -1152,6 +1155,29 @@ int main()
 				play.map->wavesCleared = atoi(getenv("DM_FAKE_RESULT"));
 				play.map->finished = true;
 				play.map->finishedWon = getenv("DM_FAKE_WIN") != NULL;
+			}
+			if (getenv("DM_AUTOPLAY"))   /* test hook: builds, upgrades, repairs and sells towers by itself, at speed */
+			{
+				static unsigned rnd = getenv("DM_SEED") ? (unsigned)atoi(getenv("DM_SEED")) : 12345;
+				static int n;
+				auto next = [&]() { rnd = rnd * 1103515245u + 12345u; return (int)((rnd >> 8) & 0xFFFF); };
+				globalSpeed = 4.0f;
+				Map *m = play.map;
+				if (++n % 25 == 0 && !m->towerTypes.empty())
+				{
+					int tx = next() % m->cols, ty = next() % m->rows;
+					if (m->canBuild(tx * m->tileSize + 4, ty * m->tileSize + 4) && m->towerAt(tx * m->tileSize + 4, ty * m->tileSize + 4) == -1)
+						m->addTower(next() % (int)m->towerTypes.size(), tx, ty);
+				}
+				if (n % 40 == 0 && !m->towers.empty())
+				{
+					Tower *t = m->towers[next() % m->towers.size()];
+					if (!t->destroyed) t->upgrade();
+				}
+				if (n % 90 == 0 && !m->towers.empty())
+					m->towers[next() % m->towers.size()]->repair();
+				if (n % 300 == 0 && m->towers.size() > 6)
+					m->sellTower(m->towers[next() % m->towers.size()]);
 			}
 			drop_menu_if_tower_gone(play);
 			play_input(play, dt);

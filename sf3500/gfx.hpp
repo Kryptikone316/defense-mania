@@ -21,6 +21,7 @@ void gfx_present();                      /* shows the canvas (or dumps it for th
 void gfx_clear(uint8_t r, uint8_t g, uint8_t b);
 unsigned gfx_pad();                      /* held buttons, one bit per JK_* of joykey.hpp */
 uint32_t millis();
+void gfx_canvas_info(unsigned long out[3]);   /* canvas pointer, width, height - for the crash report */
 
 /* ---- settings ---- */
 double cfg_num(const char *key, double def);   /* defensemania.cfg, key = value */

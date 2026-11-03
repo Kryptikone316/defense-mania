@@ -184,9 +184,39 @@ static void dump_frame(int frame)
 		}
 }
 
+/* The canvas pointer and size must never change after start-up. If something wrote over them, say so in log.txt (once)
+ * and put them back, so the match goes on and the report shows what was overwritten. */
+static void check_canvas()
+{
+	static uint16_t *fbGood;
+	static int swGood, shGood;
+	if (!fbGood)
+	{
+		fbGood = fb;
+		swGood = SW;
+		shGood = SH;
+		return;
+	}
+	if (fb != fbGood || SW != swGood || SH != shGood)
+	{
+		static int told;
+		if (told++ < 3)
+		{
+			printf("memory overwritten: canvas %p %dx%d should be %p %dx%d\n", (void *)fb, SW, SH, (void *)fbGood, swGood, shGood);
+			fflush(stdout);
+		}
+		fb = fbGood;
+		SW = swGood;
+		SH = shGood;
+	}
+}
+
+void gfx_canvas_info(unsigned long out[3]) { out[0] = (unsigned long)fb; out[1] = (unsigned long)SW; out[2] = (unsigned long)SH; }
+
 void gfx_present()
 {
 	static int frame;
+	check_canvas();
 	if (hwdisp_active())
 		hwdisp_present(fb, SW, SH, SW * 2);
 	else
@@ -378,9 +408,17 @@ void draw_image_rot(const Image &img, int sx, int sy, int sw, int sh, float cx, 
 {
 	if (!img.valid())
 		return;
+	if (!(cx - cx == 0) || !(cy - cy == 0) || !(angle - angle == 0) || cx < -4000 || cx > 4000 || cy < -4000 || cy > 4000)
+		return;   /* not a place to draw */
+	if (sw <= 0 || sh <= 0 || sx < 0 || sy < 0 || sx + sw > img.w || sy + sh > img.h)
+		return;   /* not a part of this image */
 	float c = cosf(angle), s = sinf(angle);
 	float half = (sw > sh ? sw : sh) * 0.75f;
 	int x0 = (int)(cx - half), x1 = (int)(cx + half) + 1, y0 = (int)(cy - half), y1 = (int)(cy + half) + 1;
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > SW) x1 = SW;
+	if (y1 > SH) y1 = SH;
 	for (int y = y0; y < y1; y++)
 	{
 		if (y < 0 || y >= SH)
