@@ -63,10 +63,12 @@ public:
 	void display();
 	void displayGui();
 	void setWaypoints(const int *start, const int *end, const std::vector<std::pair<int, int> > &wps);
-	void hitByTower(int damage, float freeze);
-	void hitByTower(int damage, float freeze, Tower *tower, float multiplier);
+	void hitByTower(float damage, float freeze, float chill = 0);
+	void hitByTower(float damage, float freeze, Tower *tower, float multiplier, float chill = 0);
 	void hitAnimation(const std::string &charset, int x);
 	bool alive() const { return enemyAlive; }
+	bool flying = false; /* ground-only towers cannot target it, ground traps do not touch it */
+
 	int maxHealthValue() const { return maxHealth; }
 	void calcFuture(int timeMs, float out[2]) const;
 
@@ -77,7 +79,9 @@ public:
 private:
 	void checkWP();
 	void calculateMoveVector();
-	void getDamage(int damage, float freeze);
+	void getDamage(float damage, float freeze, float chill);
+	float dmgCarry = 0, chillPct = 0;    /* the fractions of damage not dealt yet; how much more damage a slowed creature takes */
+	int chillUntil = 0;
 	Map *map;
 	Sheet *sheet;
 	std::string sheetFile;
@@ -106,8 +110,8 @@ public:
 	void start();
 	void calcEnemyDistance();
 	void displayGui();
-	void splash(Enemy *e, int damage, int radius, float factor);
-	Enemy *checkEnemy(int x, int y, int radius, float freeze);
+	void splash(Enemy *e, float damage, int radius, float factor);
+	Enemy *checkEnemy(int x, int y, int radius, float freeze, bool groundOnly = false);
 	bool complete() const;
 	std::vector<Enemy *> list;
 	std::vector<Sheet *> nextIcons;
@@ -153,6 +157,8 @@ struct TowerType {
 	int ucosts[4], udamage[4], ufirerate[4], ufireradius[4];
 	bool support = false;   /* a depot: no weapon, it supplies the towers around it */
 	SupportLevel sup[3];
+	bool groundOnly = false;   /* artillery: cannot hit flying creatures */
+	float chill[3] = { 0, 0, 0 };   /* Freeze towers: percent more damage every tower deals to a slowed creature */
 	Image iconImg;
 };
 
@@ -179,6 +185,9 @@ public:
 	std::string name;
 	bool support = false;   /* a Resupply Depot */
 	SupportLevel sup[3];
+	bool groundOnly = false;
+	float chill[3] = { 0, 0, 0 };
+	float chillNow() const { return chill[currentUpdate < 3 ? currentUpdate : 2]; }
 	const SupportLevel &supportNow() const { return sup[currentUpdate < 3 ? currentUpdate : 2]; }
 	float buffRate = 1.0f, healCarry = 0;   /* set every frame by the map from the depots around */
 private:

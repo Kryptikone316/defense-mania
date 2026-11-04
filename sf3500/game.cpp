@@ -83,6 +83,7 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	icon = map->charSets.add(def.str("icon"), -1);
 	maxHealth = health = (int)(def.num("maxhealth") * map->difficulty * sc.hp + 0.5f);
 	if (maxHealth < 1) maxHealth = health = 1;
+	flying = def.num("flying") != 0 || getenv("DM_ALLFLY") != NULL;   /* the test hook makes every creature fly */
 	moveSpeed = (int)(def.num("movespeed") * sc.speed + 0.5f);
 	money = (int)(def.num("money") * sc.money + 0.5f);
 	goldValue = (float)def.num("money") * sc.money * sc.gold;
@@ -271,16 +272,23 @@ void Enemy::displayGui()
 	}
 }
 
-void Enemy::getDamage(int dmg, float freeze)
+void Enemy::getDamage(float dmg, float freeze, float chill)
 {
+	int now = (int)gnow();
 	if (freeze > 0)
 	{
-		freezeCount = gnow();
+		freezeCount = now;
 		freezeFactor = freeze;
 		frozen = true;
 		freezeTime = 2500;
+		if (now >= chillUntil || chill > chillPct) chillPct = chill;   /* a slowed creature takes more damage from every tower for as long as the slow lasts */
+		chillUntil = now + 2500;
 	}
-	health -= dmg;
+	if (now < chillUntil && chillPct > 0) dmg *= 1.0f + chillPct / 100.0f;
+	dmgCarry += dmg;   /* small hits (splash!) still add up: the fraction is kept for the next one */
+	int whole = (int)dmgCarry;
+	dmgCarry -= (float)whole;
+	health -= whole;
 	if (health < 0)
 	{
 		moveComplete = 999999999;
@@ -293,11 +301,11 @@ void Enemy::getDamage(int dmg, float freeze)
 	}
 }
 
-void Enemy::hitByTower(int dmg, float freeze) { getDamage(dmg, freeze); }
+void Enemy::hitByTower(float dmg, float freeze, float chill) { getDamage(dmg, freeze, chill); }
 
-void Enemy::hitByTower(int dmg, float freeze, Tower *tower, float multiplier)
+void Enemy::hitByTower(float dmg, float freeze, Tower *tower, float multiplier, float chill)
 {
-	int hitDamage = dmg;
+	int hitDamage = (int)dmg;
 	bool found = false;
 	for (size_t i = 0; i < towerHits.size(); i++)
 		if (towerHits[i].tower == tower)
@@ -308,10 +316,10 @@ void Enemy::hitByTower(int dmg, float freeze, Tower *tower, float multiplier)
 		}
 	if (!found)
 	{
-		TowerHit h = { tower, 1, dmg, multiplier };
+		TowerHit h = { tower, 1, (int)dmg, multiplier };
 		towerHits.push_back(h);
 	}
-	getDamage(hitDamage, freeze);
+	getDamage((float)hitDamage, freeze, chill);
 }
 
 void Enemy::hitAnimation(const std::string &cs, int x)
@@ -448,33 +456,33 @@ void Wave::displayGui()
 			list[i]->displayGui();
 }
 
-void Wave::splash(Enemy *e, int damage, int radius, float factor)
+void Wave::splash(Enemy *e, float damage, int radius, float factor)
 {
 	for (size_t i = 0; i < list.size(); i++)
 	{
 		Enemy *t = list[i];
-		if (dist(e->position[0], e->position[1], t->position[0], t->position[1]) < radius && t != e && t->enemyAlive)
-			t->hitByTower((int)(damage * factor), 0);
+		if (dist(e->position[0], e->position[1], t->position[0], t->position[1]) < radius && t != e && t->enemyAlive && !t->flying)   /* artillery splash does not reach flyers */
+			t->hitByTower(damage * factor, 0);
 	}
 }
 
 static bool further(const Enemy *a, const Enemy *b) { return a->moveComplete > b->moveComplete; }
 
-Enemy *Wave::checkEnemy(int x, int y, int radius, float freeze)
+Enemy *Wave::checkEnemy(int x, int y, int radius, float freeze, bool groundOnly)
 {
 	std::vector<Enemy *> sorted = list;
 	std::stable_sort(sorted.begin(), sorted.end(), further);
 	for (size_t i = 0; i < sorted.size(); i++)
 	{
 		Enemy *t = sorted[i];
-		if (dist((float)(int)t->position[0], (float)(int)t->position[1], (float)x, (float)y) <= radius && t->alive() && t->position[0] > 0)
+		if (dist((float)(int)t->position[0], (float)(int)t->position[1], (float)x, (float)y) <= radius && t->alive() && t->position[0] > 0 && !(groundOnly && t->flying))
 			if (freeze == 0 || !t->frozen || (t->freezeCount < (int)gnow() - t->freezeTime + 300))
 				return t;
 	}
 	for (size_t i = 0; i < sorted.size(); i++)
 	{
 		Enemy *t = sorted[i];
-		if (dist((float)(int)t->position[0], (float)(int)t->position[1], (float)x, (float)y) <= radius && t->alive() && t->position[0] > 0)
+		if (dist((float)(int)t->position[0], (float)(int)t->position[1], (float)x, (float)y) <= radius && t->alive() && t->position[0] > 0 && !(groundOnly && t->flying))
 			return t;
 	}
 	return NULL;
@@ -587,7 +595,8 @@ Tower::Tower(const TowerType &t, int x, int y, Map *m) : map(m)
 	hasShootingAnimation = t.hasShootingAnimation;
 	damageIncrease = t.damageIncrease;
 	support = t.support;
-	for (int i = 0; i < 3; i++) sup[i] = t.sup[i];
+	groundOnly = t.groundOnly;
+	for (int i = 0; i < 3; i++) { sup[i] = t.sup[i]; chill[i] = t.chill[i]; }
 	for (int i = 0; i < 4; i++)
 	{
 		ucosts[i] = t.ucosts[i];
@@ -614,7 +623,10 @@ std::string Tower::description() const
 		return support_text(supportNow(), map->tileSize) + "\n" + desc;
 	char b[160];
 	snprintf(b, sizeof b, "DMG: %d   FR: %.1fs\n", damage, (float)fireRate / 1000);
-	return std::string(b) + desc;
+	std::string extra;
+	if (chillNow() > 0) { char c[64]; snprintf(c, sizeof c, "\nSlowed creatures take +%.0f%% damage", chillNow()); extra += c; }
+	if (groundOnly) extra += "\nGround targets only";
+	return std::string(b) + desc + extra;
 }
 
 int Tower::repairCosts() const
@@ -667,7 +679,7 @@ void Tower::checkEnemy()
 	if (!map->waves)
 		return;
 	int tile = map->tileSize;
-	Enemy *e = map->waves->started ? map->waves->waves[map->waves->current]->checkEnemy((int)((position[0] + 0.5) * tile), (int)((position[1] + 0.5) * tile), (fireRadius / 2) + (towerTileSize / 4), freeze) : NULL;
+	Enemy *e = map->waves->started ? map->waves->waves[map->waves->current]->checkEnemy((int)((position[0] + 0.5) * tile), (int)((position[1] + 0.5) * tile), (fireRadius / 2) + (towerTileSize / 4), freeze, groundOnly) : NULL;
 	if (e)
 	{
 		shootAt = e;
@@ -855,11 +867,11 @@ void Tower::displayArrow()
 		if (shootAt)
 		{
 			if (damageIncrease > 0)
-				shootAt->hitByTower(damage, freeze, this, damageIncrease);
+				shootAt->hitByTower((float)damage, freeze, this, damageIncrease, chillNow());
 			else
-				shootAt->hitByTower(damage, freeze);
+				shootAt->hitByTower((float)damage, freeze, chillNow());
 			if (splash && map->waves)
-				map->waves->waves[map->waves->current]->splash(shootAt, damage, splashRadius, splashFactor);
+				map->waves->waves[map->waves->current]->splash(shootAt, (float)damage, splashRadius, splashFactor);
 			if (explosionAtEnemy)
 				shootAt->hitAnimation(sheetFile, 6 + currentUpdate * 9);
 			else
@@ -980,6 +992,7 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 		tt.hasShootingAnimation = n.num("hasshootinganimation") == 1;
 		tt.damageIncrease = n.flt("damageincrease");
 		tt.support = n.num("support") != 0;
+		tt.groundOnly = n.num("groundonly") != 0;
 		for (int lvl = 0; lvl < 3; lvl++)
 		{
 			auto g = [&](const char *base, float prev) -> float {
@@ -993,6 +1006,7 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 			tt.sup[lvl].heal = g("supportheal", lvl ? pv.heal : 0);
 			tt.sup[lvl].gold = g("supportgold", lvl ? pv.gold : 0);
 			tt.sup[lvl].goldPct = g("supportgoldpct", lvl ? pv.goldPct : 0);
+			tt.chill[lvl] = g("chill", lvl ? tt.chill[lvl - 1] : 0);
 		}
 		for (int j = 0; j < 4; j++)
 		{

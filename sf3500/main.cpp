@@ -819,7 +819,7 @@ static void draw_radial(const Play &p)
 		if (t.support)
 			snprintf(b, sizeof b, "%s - %d $\n%s", t.name.c_str(), t.costs, support_text(t.sup[0], m->tileSize).c_str());
 		else
-			snprintf(b, sizeof b, "%s - %d $\nDMG: %d   FR: %.1fs   %s", t.name.c_str(), t.costs, t.damage, (float)t.fireRate / 1000, t.description.c_str());
+			snprintf(b, sizeof b, "%s - %d $\nDMG: %d   FR: %.1fs   %s%s%s", t.name.c_str(), t.costs, t.damage, (float)t.fireRate / 1000, t.description.c_str(), t.groundOnly ? "  (ground only)" : "", t.chill[0] > 0 ? "  (slowed take more damage)" : "");
 		info_box(b);
 	}
 	else if (p.menuTower)
