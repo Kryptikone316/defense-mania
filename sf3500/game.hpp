@@ -34,6 +34,8 @@ struct WaveScale {
 struct Stats {
 	int goldEarned = 0, goldSpent = 0, goldSold = 0;
 	int built[8] = { 0 }, upgrades = 0, repairs = 0, sold = 0, towersLost = 0;
+	int trapsBuilt[4] = { 0 }, boulderThrows = 0;   /* by trap type; boulders thrown back at towers */
+	float depotGold = 0;                            /* the extra gold the Resupply Depots paid */
 	int enemiesDefeated = 0, enemiesLeaked = 0, shots = 0;
 	int playMs = 0;
 };
@@ -72,6 +74,10 @@ public:
 	int maxHealthValue() const { return maxHealth; }
 	void calcFuture(int timeMs, float out[2]) const;
 
+	float armor = 0;         /* flat damage taken off every hit (never more than three quarters of it) */
+	bool thrower = false;    /* lifts a blocking boulder and hurls it at a tower nearby */
+	float throwRange = 150, throwDamage = 100;
+	int liftTime = 2500, liftStart = 0, liftTrapId = 0;
 	int glueUntil = 0;       /* stuck in glue until this game time */
 	float glueFactor = 1;    /* ... and moving at this fraction of the speed */
 	float moveComplete = 0, position[2];
@@ -211,6 +217,12 @@ private:
 };
 
 /* path traps, set on the path by the player: Spikes hurt what crosses them, Glue slows, a Boulder blocks the path until it is smashed */
+struct Projectile {   /* a thrown boulder in the air */
+	float x0, y0, x1, y1;
+	int start, duration;
+	float damage;
+};
+
 struct TrapType {
 	std::string id, name, kind, text;
 	int costs = 0, cap = 0, charges = 0, interval = 0, duration = 0, health = 0, attackers = 0;
@@ -218,6 +230,7 @@ struct TrapType {
 	Image icon, picture, crack[2];   /* a boulder shows cracks as it is smashed */
 };
 struct Trap {
+	int id = 0;
 	int type = 0, born = 0;
 	float x = 0, y = 0;
 	float charges = 0, health = 0;   /* spikes: hits left; boulder: health left */
@@ -238,6 +251,11 @@ public:
 	void checkTowers(int x, int y, int radius, int damage);
 	std::vector<TrapType> trapTypes;
 	std::vector<Trap> traps;
+	std::vector<Projectile> projectiles;
+	int trapSerial = 0;
+	bool hasThrowers() const;
+	bool towerInReach(float x, float y, float range) const;
+	bool throwBoulder(Trap *t, float range, float damage);   /* false when no tower is in reach */
 	std::vector<std::pair<float, float> > pathPts;   /* the path as a line: start, way points, end */
 	bool nearPath(float wx, float wy, float maxDist, float &px, float &py) const;
 	int trapCount(int type) const;

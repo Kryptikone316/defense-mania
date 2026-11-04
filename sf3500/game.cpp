@@ -83,6 +83,15 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	icon = map->charSets.add(def.str("icon"), -1);
 	maxHealth = health = (int)(def.num("maxhealth") * map->difficulty * sc.hp + 0.5f);
 	if (maxHealth < 1) maxHealth = health = 1;
+	armor = def.flt("armor");
+	thrower = def.num("thrower") != 0;
+	throwRange = def.flt("throwrange", 150);
+	throwDamage = def.flt("throwdamage", 100) * map->difficulty * sc.damage;
+	liftTime = def.num("lifttime", 2500);
+	if (def.num("attackrate") > 0) fireRate = def.num("attackrate");
+	if (def.num("attackradius") > 0) fireRadius = def.num("attackradius");
+	if (getenv("DM_ALLTHROW")) { thrower = true; liftTime = 1500; }   /* test hooks */
+	if (getenv("DM_ARMOR")) armor = (float)atof(getenv("DM_ARMOR"));
 	flying = def.num("flying") != 0 || getenv("DM_ALLFLY") != NULL;   /* the test hook makes every creature fly */
 	moveSpeed = (int)(def.num("movespeed") * sc.speed + 0.5f);
 	money = (int)(def.num("money") * sc.money + 0.5f);
@@ -239,7 +248,27 @@ void Enemy::display()
 			if (bt)   /* a boulder in the way: stop, and the first few creatures smash it */
 			{
 				px = 0;
-				if (bt->attackers < map->trapTypes[bt->type].attackers)
+				bool lifting = false;
+				if (thrower)   /* a troll or ogre would rather lift it and throw it at a tower in reach */
+				{
+					int now = (int)gnow();
+					if (liftTrapId != bt->id && map->towerInReach(bt->x, bt->y, throwRange))
+					{
+						liftTrapId = bt->id;
+						liftStart = now;
+					}
+					if (liftTrapId == bt->id)
+					{
+						lifting = true;
+						if (now - liftStart >= liftTime)
+						{
+							if (map->throwBoulder(bt, throwRange, throwDamage)) bt = NULL;
+							liftTrapId = 0;
+							lifting = bt != NULL ? false : true;
+						}
+					}
+				}
+				if (bt && !lifting && bt->attackers < map->trapTypes[bt->type].attackers)
 				{
 					bt->attackers++;
 					bt->health -= (4.0f + maxHealth * 0.03f) * dt / 1000.0f;
@@ -303,6 +332,11 @@ void Enemy::getDamage(float dmg, float freeze, float chill)
 		chillUntil = now + 2500;
 	}
 	if (now < chillUntil && chillPct > 0) dmg *= 1.0f + chillPct / 100.0f;
+	if (armor > 0)
+	{
+		float floorDmg = dmg * 0.25f;   /* armour never stops a hit altogether */
+		dmg = dmg - armor < floorDmg ? floorDmg : dmg - armor;
+	}
 	dmgCarry += dmg;   /* small hits (splash!) still add up: the fraction is kept for the next one */
 	int whole = (int)dmgCarry;
 	dmgCarry -= (float)whole;
@@ -312,7 +346,9 @@ void Enemy::getDamage(float dmg, float freeze, float chill)
 		moveComplete = 999999999;
 		enemyAlive = false;
 		dieCount = gnow();
-		map->stats.goldEarned += map->award(goldValue + map->supportGold(position[0], position[1], goldValue));
+		float bonus = map->supportGold(position[0], position[1], goldValue);
+		map->stats.goldEarned += map->award(goldValue + bonus);
+		map->stats.depotGold += bonus;
 		map->killPoints += money * 5;
 		map->stats.enemiesDefeated++;
 		sfx_play(SFX_DIE);
@@ -400,8 +436,10 @@ bool Map::addTrap(int type, float px, float py)
 		return false;
 	const TrapType &t = trapTypes[type];
 	money -= t.costs;
+	stats.goldSpent += t.costs;
+	if (type < 4) stats.trapsBuilt[type]++;
 	Trap tr;
-	tr.type = type; tr.x = px; tr.y = py; tr.born = (int)gnow();
+	tr.id = ++trapSerial; tr.type = type; tr.x = px; tr.y = py; tr.born = (int)gnow();
 	tr.charges = (float)t.charges; tr.health = (float)t.health;
 	traps.push_back(tr);
 	sfx_play(SFX_BUILD);
@@ -423,6 +461,46 @@ Trap *Map::blockingTrap(float x, float y, float mx, float my, float step)
 		if (side < r && ahead - r <= step + 1) return &t;   /* its next step reaches the boulder */
 	}
 	return NULL;
+}
+
+bool Map::towerInReach(float x, float y, float range) const
+{
+	for (size_t i = 0; i < towers.size(); i++)
+		if (!towers[i]->destroyed && dist((towers[i]->position[0] + 0.5f) * tileSize, (towers[i]->position[1] + 0.5f) * tileSize, x, y) <= range) return true;
+	return false;
+}
+
+/* a creature has lifted the boulder: it flies at the nearest tower in reach (ties: the one built first), which takes the hit when it lands */
+bool Map::throwBoulder(Trap *t, float range, float damage)
+{
+	int best = -1;
+	float bestD = 1e30f;
+	for (size_t i = 0; i < towers.size(); i++)
+	{
+		if (towers[i]->destroyed) continue;
+		float d = dist((towers[i]->position[0] + 0.5f) * tileSize, (towers[i]->position[1] + 0.5f) * tileSize, t->x, t->y);
+		if (d <= range && d < bestD) { bestD = d; best = (int)i; }
+	}
+	if (best < 0) return false;
+	Projectile p;
+	p.x0 = t->x; p.y0 = t->y;
+	p.x1 = (towers[best]->position[0] + 0.5f) * tileSize; p.y1 = (towers[best]->position[1] + 0.5f) * tileSize;
+	p.start = (int)gnow(); p.duration = 450; p.damage = damage;
+	projectiles.push_back(p);
+	stats.boulderThrows++;
+	if (getenv("DM_TRAPLOG")) { printf("THROW boulder %d at tower %d,%d for %.0f\n", t->id, towers[best]->position[0], towers[best]->position[1], damage); fflush(stdout); }
+	t->health = 0;   /* the boulder is gone from the path */
+	sfx_play(SFX_CATAPULT);
+	return true;
+}
+
+bool Map::hasThrowers() const
+{
+	if (!waves) return false;
+	for (size_t i = 0; i < waves->waves.size(); i++)
+		for (size_t k = 0; k < waves->waves[i]->list.size(); k++)
+			if (waves->waves[i]->list[k]->thrower) return true;
+	return false;
 }
 
 void Map::updateTraps()
@@ -463,6 +541,19 @@ void Map::updateTraps()
 			if (t.hits.size() > 64) t.hits.erase(t.hits.begin(), t.hits.begin() + 32);
 		}
 	}
+	for (size_t i = 0; i < projectiles.size();)
+	{
+		const Projectile &p = projectiles[i];
+		if (now - p.start >= p.duration)
+		{
+			for (size_t k = 0; k < towers.size(); k++)   /* the tower that stands where it lands */
+				if (!towers[k]->destroyed && dist((towers[k]->position[0] + 0.5f) * tileSize, (towers[k]->position[1] + 0.5f) * tileSize, p.x1, p.y1) < 4)
+					towers[k]->enemyDamage((int)p.damage);
+			sfx_play(SFX_CRUMBLE);
+			projectiles.erase(projectiles.begin() + i);
+		}
+		else i++;
+	}
 	for (size_t i = 0; i < traps.size();)
 	{
 		Trap &t = traps[i];
@@ -475,6 +566,15 @@ void Map::updateTraps()
 void Map::drawTraps()
 {
 	int now = (int)gnow();
+	for (size_t i = 0; i < projectiles.size(); i++)
+	{
+		const Projectile &p = projectiles[i];
+		float t = (float)(now - p.start) / p.duration;
+		t = t < 0 ? 0 : t > 1 ? 1 : t;
+		float x = p.x0 + (p.x1 - p.x0) * t, y = p.y0 + (p.y1 - p.y0) * t - sinf(t * PI_F) * 60;
+		for (size_t k = 0; k < trapTypes.size(); k++)
+			if (trapTypes[k].kind == "boulder") draw_image_center(trapTypes[k].picture, x - camX, y - camY, 0, 0, -1, -1, 255, 0xFFFFFF);
+	}
 	for (size_t i = 0; i < traps.size(); i++)
 	{
 		const Trap &t = traps[i];

@@ -186,7 +186,7 @@ struct Result {
 	int winBonus = 0, lifeBonus = 0, waveBonus = 0, perfect = 0, perfectBase = 0;
 	int rank = -1;               /* place in the table, -1 when it did not make it */
 	Stats stats;
-	std::vector<std::string> towerNames;
+	std::vector<std::string> towerNames, trapNames;
 	bool endless = false;
 	int newUnlock = 0;           /* a difficulty this win opened, 0 for none */
 };
@@ -221,6 +221,9 @@ static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
 	r.towerNames.clear();
 	for (size_t i = 0; i < m->towerTypes.size(); i++)
 		r.towerNames.push_back(m->towerTypes[i].name);
+	r.trapNames.clear();
+	for (size_t i = 0; i < m->trapTypes.size(); i++)
+		r.trapNames.push_back(m->trapTypes[i].name);
 	r.won = won;
 	r.mult = m->scoreMult();
 	r.waveBonus = r.wavesCleared * 100;
@@ -571,51 +574,65 @@ static void draw_stats(const Result &r)
 	char b[64];
 	draw_text(r.endless ? "RUN OVER" : r.won ? "VICTORY!" : "DEFEATED", 24, 10, 30, r.endless || r.won ? 0xFFE066 : 0xFF7070, ALIGN_LEFT, 0);
 	draw_text("MATCH STATS", SW - 24, 20, 18, 0xFFFFFF, ALIGN_RIGHT, 0);
-	struct Col { int x; const char *head; } cols[3] = { { 24, "GOLD" }, { 232, "TOWERS" }, { 440, "ENEMIES" } };
+	struct Col { int x; const char *head; } cols[3] = { { 24, "GOLD" }, { 232, "TOWERS BUILT" }, { 440, "ENEMIES" } };
 	for (int i = 0; i < 3; i++)
 	{
-		draw_text(cols[i].head, cols[i].x, 62, 14, 0x89F9FF, ALIGN_LEFT, 0);
-		fill_rect(cols[i].x, 82, 180, 1, 0xF8DDC2);
+		draw_text(cols[i].head, cols[i].x, 56, 14, 0x89F9FF, ALIGN_LEFT, 0);
+		fill_rect(cols[i].x, 76, 180, 1, 0xF8DDC2);
 	}
-	int y = 92, dy = 20;
+	const int y0 = 84, dy = 17;   /* at most ten lines a column: they end above the buttons */
+	int y = y0;
 	auto row = [&](int x, const char *label, const std::string &val) {
 		draw_text(label, x, y, 12, 0xE6E6E6, ALIGN_LEFT, 1);
 		draw_text(val, x + 180, y, 12, 0xFFFFFF, ALIGN_RIGHT, 2);
+		y += dy;
+	};
+	auto sub = [&](int x, const char *head) {
+		draw_text(head, x, y + 2, 11, 0x89F9FF, ALIGN_LEFT, 0);
+		y += dy;
 	};
 	auto num = [&](int v) { snprintf(b, sizeof b, "%d", v); return std::string(b); };
-	/* gold */
-	int yy = y;
-	row(24, "Earned from enemies", num(st.goldEarned)); y += dy;
-	row(24, "Spent on towers", num(st.goldSpent)); y += dy;
-	row(24, "Gained selling", num(st.goldSold)); y += dy;
-	row(24, "Left over", num(r.money)); y += dy;
-	/* towers */
-	y = yy;
+	/* gold, then what became of the towers */
+	row(24, "Earned from enemies", num(st.goldEarned));
+	row(24, "Depot bonus (in that)", num((int)st.depotGold));
+	row(24, "Spent on towers, traps", num(st.goldSpent));
+	row(24, "Gained selling", num(st.goldSold));
+	row(24, "Left over", num(r.money));
+	sub(24, "TOWER UPKEEP");
+	row(24, "Upgrades", num(st.upgrades));
+	row(24, "Repairs", num(st.repairs));
+	row(24, "Sold", num(st.sold));
+	row(24, "Lost in battle", num(st.towersLost));
+	/* the towers */
+	y = y0;
 	int total = 0;
 	for (size_t i = 0; i < r.towerNames.size() && i < 8; i++)
 	{
 		row(232, r.towerNames[i].c_str(), num(st.built[i]));
 		total += st.built[i];
-		y += dy;
 	}
-	row(232, "Upgrades", num(st.upgrades)); y += dy;
-	row(232, "Repairs", num(st.repairs)); y += dy;
-	row(232, "Sold", num(st.sold)); y += dy;
-	row(232, "Lost in battle", num(st.towersLost)); y += dy;
-	/* enemies */
-	y = yy;
-	row(440, "Defeated", num(st.enemiesDefeated)); y += dy;
-	row(440, "Reached the end", num(st.enemiesLeaked)); y += dy;
-	row(440, "Shots fired", num(st.shots)); y += dy;
+	fill_rect(232, y, 180, 1, 0x707070);
+	y += 4;
+	row(232, "In all", num(total));
+	/* the enemies, and the traps */
+	y = y0;
+	row(440, "Defeated", num(st.enemiesDefeated));
+	row(440, "Reached the end", num(st.enemiesLeaked));
+	row(440, "Shots fired", num(st.shots));
 	int sec = st.playMs / 1000;
 	snprintf(b, sizeof b, "%d:%02d", sec / 60, sec % 60);
-	row(440, "Time played", b); y += dy;
-	row(440, "Lives left", num(r.lives)); y += dy;
-	snprintf(b, sizeof b, total == 1 ? "%d tower built" : "%d towers built", total);
-	draw_text(b, SW / 2, SH - 100, 12, 0xB0B0B0, ALIGN_CENTER, 1);
+	row(440, "Time played", b);
+	row(440, "Lives left", num(r.lives));
+	if (!r.trapNames.empty())
+	{
+		sub(440, "TRAPS PLACED");
+		for (size_t i = 0; i < r.trapNames.size() && i < 4; i++)
+			row(440, r.trapNames[i].c_str(), num(st.trapsBuilt[i]));
+		if (st.boulderThrows) row(440, "Boulders thrown at towers", num(st.boulderThrows));
+	}
 }
 
-static int afterView = 0;
+static int afterView = getenv("DM_AFTERVIEW") ? 1 : 0;   /* test hook: open on the match stats */
 
 static Screen screen_after(Result &r, int &sel)
 {
