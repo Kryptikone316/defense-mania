@@ -286,7 +286,7 @@ void Enemy::getDamage(int dmg, float freeze)
 		moveComplete = 999999999;
 		enemyAlive = false;
 		dieCount = gnow();
-		map->stats.goldEarned += map->award(goldValue);
+		map->stats.goldEarned += map->award(goldValue + map->supportGold(position[0], position[1], goldValue));
 		map->killPoints += money * 5;
 		map->stats.enemiesDefeated++;
 		sfx_play(SFX_DIE);
@@ -331,6 +331,66 @@ static float gold_factor(int difficulty, int wave, int waves)
 	float growth = waves > 1 ? (float)cfg_num("gold_wave_growth", 0.8) * wave / (float)(waves - 1) : 0.0f;
 	return diff * (1.0f + growth);
 }
+void Map::applySupport()
+{
+	int now = (int)gnow();
+	int dt = supportTick < 0 ? 0 : now - supportTick;
+	supportTick = now;
+	if (dt < 0 || dt > 1000) dt = 0;
+	std::vector<Tower *> depots;
+	for (size_t i = 0; i < towers.size(); i++)
+		if (towers[i]->support && !towers[i]->destroyed) depots.push_back(towers[i]);
+	for (size_t i = 0; i < towers.size(); i++)
+	{
+		Tower *t = towers[i];
+		t->buffRate = 1.0f;
+		if (t->support || t->destroyed || depots.empty()) continue;
+		float tx, ty, rate = 0, heal = 0;
+		t->center(tx, ty);
+		for (size_t k = 0; k < depots.size(); k++)
+		{
+			float dx, dy;
+			depots[k]->center(dx, dy);
+			const SupportLevel &s = depots[k]->supportNow();
+			if ((tx - dx) * (tx - dx) + (ty - dy) * (ty - dy) <= s.range * s.range)
+			{
+				if (s.rate > rate) rate = s.rate;   /* the strongest depot counts, they do not add up */
+				if (s.heal > heal) heal = s.heal;
+			}
+		}
+		t->buffRate = 1.0f + rate / 100.0f;
+		if (heal > 0 && t->health < t->maxHealth)
+		{
+			t->healCarry += t->maxHealth * heal / 100.0f * dt / 1000.0f;
+			int h = (int)t->healCarry;
+			if (h > 0)
+			{
+				t->health = t->health + h > t->maxHealth ? t->maxHealth : t->health + h;
+				t->healCarry -= (float)h;
+			}
+		}
+	}
+}
+
+float Map::supportGold(float x, float y, float killGold) const
+{
+	float best = 0;
+	for (size_t i = 0; i < towers.size(); i++)
+	{
+		const Tower *d = towers[i];
+		if (!d->support || d->destroyed) continue;
+		float dx, dy;
+		d->center(dx, dy);
+		const SupportLevel &s = d->supportNow();
+		if ((x - dx) * (x - dx) + (y - dy) * (y - dy) <= s.range * s.range)
+		{
+			float g = s.gold + killGold * s.goldPct / 100.0f;
+			if (g > best) best = g;   /* the strongest depot counts */
+		}
+	}
+	return best;
+}
+
 int Map::award(float gold)
 {
 	moneyCarry += gold;
@@ -526,6 +586,8 @@ Tower::Tower(const TowerType &t, int x, int y, Map *m) : map(m)
 	explosionAtEnemy = t.explosionAtEnemy;
 	hasShootingAnimation = t.hasShootingAnimation;
 	damageIncrease = t.damageIncrease;
+	support = t.support;
+	for (int i = 0; i < 3; i++) sup[i] = t.sup[i];
 	for (int i = 0; i < 4; i++)
 	{
 		ucosts[i] = t.ucosts[i];
@@ -536,8 +598,20 @@ Tower::Tower(const TowerType &t, int x, int y, Map *m) : map(m)
 	enemyPosition[0] = enemyPosition[1] = hitAniPos[0] = hitAniPos[1] = arrowPosition[0] = arrowPosition[1] = 0;
 }
 
+std::string support_text(const SupportLevel &s, int tile)
+{
+	char b[200], g[64] = "";
+	if (s.gold > 0 && s.goldPct > 0) snprintf(g, sizeof g, "+%.0f gold and +%.0f%% per kill", s.gold, s.goldPct);
+	else if (s.gold > 0) snprintf(g, sizeof g, "+%.0f gold per kill", s.gold);
+	else if (s.goldPct > 0) snprintf(g, sizeof g, "+%.0f%% gold per kill", s.goldPct);
+	snprintf(b, sizeof b, "Within %.1f tiles: +%.0f%% fire rate, heals %.1f%%/s, %s", tile > 0 ? s.range / tile : 0.0f, s.rate, s.heal, g);
+	return b;
+}
+
 std::string Tower::description() const
 {
+	if (support)
+		return support_text(supportNow(), map->tileSize) + "\n" + desc;
 	char b[160];
 	snprintf(b, sizeof b, "DMG: %d   FR: %.1fs\n", damage, (float)fireRate / 1000);
 	return std::string(b) + desc;
@@ -668,6 +742,7 @@ void Tower::display()
 			else if ((a > (PI_F + (PI_F * 3 / 8)) && a <= (PI_F + (PI_F * 5 / 8))) || (a < -(PI_F * 3 / 8) && a >= -(PI_F * 5 / 8))) towerDirection = 4;
 			else if ((a > (PI_F + (PI_F * 5 / 8)) && a <= (PI_F + (PI_F * 7 / 8))) || (a < -(PI_F / 8) && a >= -(PI_F * 3 / 8))) towerDirection = 3;
 			else towerDirection = 2;
+			if (support) towerDirection = 0;   /* a depot has no front */
 			uint32_t tint = 0xFFFFFF;
 			if (selected)   /* the chosen tower pulses while its menu is open */
 			{
@@ -696,7 +771,7 @@ void Tower::display()
 				dbgCol = (currentUpdate * 9) + animationState; dbgRow = towerDirection; if (frame_ok(sheet, dbgCol, dbgRow)) drawnFrame = g_mapFrame;
 				frame_center(sheet, (currentUpdate * 9) + animationState, towerDirection, cx, cy, 255, tint);
 			}
-			if ((float)((int)gnow() - fireCount) >= (fireRate / 1.0f))
+			if (!support && (float)((int)gnow() - fireCount) >= (fireRate / buffRate))
 			{
 				checkEnemy();
 				fireCount = gnow();
@@ -739,8 +814,10 @@ void Tower::displayGui()
 	if (showRadius && !destroyed)
 	{
 		float cx = (position[0] + 0.5f) * tile - camX, cy = (position[1] + 0.5f) * tile - camY;
-		fill_circle(cx, cy, fireRadius / 2.0f, 0xCCFF99, 60);
-		circle_outline(cx, cy, fireRadius / 2.0f, 0xCCFF99, 200);
+		float reach = support ? supportNow().range : fireRadius / 2.0f + towerTileSize / 4.0f;   /* what the tower really reaches */
+		uint32_t col = support ? 0x99CCFF : 0xCCFF99;
+		fill_circle(cx, cy, reach, col, 60);
+		circle_outline(cx, cy, reach, col, 200);
 	}
 }
 
@@ -902,6 +979,21 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 		tt.explosionAtEnemy = n.num("explosionatenemy") == 1;
 		tt.hasShootingAnimation = n.num("hasshootinganimation") == 1;
 		tt.damageIncrease = n.flt("damageincrease");
+		tt.support = n.num("support") != 0;
+		for (int lvl = 0; lvl < 3; lvl++)
+		{
+			auto g = [&](const char *base, float prev) -> float {
+				char key[48];
+				if (lvl == 0) snprintf(key, sizeof key, "%s", base); else snprintf(key, sizeof key, "u%d-%s", lvl, base);
+				return n.str(key, "").empty() ? prev : n.flt(key);
+			};
+			const SupportLevel &pv = lvl ? tt.sup[lvl - 1] : tt.sup[0];
+			tt.sup[lvl].range = g("aurarange", lvl ? pv.range : 0);
+			tt.sup[lvl].rate = g("supportrate", lvl ? pv.rate : 0);
+			tt.sup[lvl].heal = g("supportheal", lvl ? pv.heal : 0);
+			tt.sup[lvl].gold = g("supportgold", lvl ? pv.gold : 0);
+			tt.sup[lvl].goldPct = g("supportgoldpct", lvl ? pv.goldPct : 0);
+		}
 		for (int j = 0; j < 4; j++)
 		{
 			char key[24];
@@ -1023,6 +1115,7 @@ void Map::display()
 	g_drn = 0;
 	uint32_t p0 = millis();
 	game_clock_advance();
+	applySupport();
 	if (showBuildAreas)
 	{
 		if (areasImage.px.empty())   /* once: a copy of the map with the build areas blended in, so showing them costs nothing per frame */

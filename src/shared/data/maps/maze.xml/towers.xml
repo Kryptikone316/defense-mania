@@ -12,5 +12,7 @@
 
       <tower name="Ballista Tower" damageincrease="1.5" explosionatenemy="1" hasshootinganimation="1" charset="../../../towers/tower5.png" towericon="../../../towers/tower_icon5.png" towericonsize="30" tilesize="64" damage="6" firerate="1000" fireradius="200" splash="0" splashradius="0" splashfactor="0" costs="100" freeze="0" maxhealth="300" updates="2" u1-costs="150" u1-damage="12" u1-firerate="800" u1-fireradius="250" u2-costs="170" u2-damage="18" u2-firerate="650" u2-fireradius="280">Long range, every shot on the same target hits harder</tower>
 
+      <tower name="Resupply Depot" damageincrease="0" explosionatenemy="0" hasshootinganimation="0" charset="../../../towers/tower6.png" towericon="../../../towers/tower_icon6.png" towericonsize="30" tilesize="64" damage="0" firerate="1000" fireradius="0" splash="0" splashradius="0" splashfactor="0" costs="70" freeze="0" maxhealth="200" updates="1" u1-costs="90" u1-damage="0" u1-firerate="1000" u1-fireradius="0" support="1" aurarange="96" supportrate="10" supportheal="0.5" supportgold="1" supportgoldpct="0" u1-aurarange="112" u1-supportrate="20" u1-supportheal="1.0" u1-supportgold="2" u1-supportgoldpct="0">Supplies the towers around it. No weapon.</tower>
+
     </towers>
   </towersettings>

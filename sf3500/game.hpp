@@ -135,12 +135,24 @@ private:
 	std::vector<int> spacing;
 };
 
+/* what a Resupply Depot gives the towers (and kills) inside its area, per level */
+struct SupportLevel {
+	float range = 0;      /* pixels from the depot's centre */
+	float rate = 0;       /* percent more shots */
+	float heal = 0;       /* percent of a tower's health mended each second */
+	float gold = 0;       /* gold more for every creature that dies inside the area */
+	float goldPct = 0;    /* percent more kill gold (on top of the flat gold) */
+};
+std::string support_text(const SupportLevel &s, int tile);
+
 struct TowerType {
 	std::string name, charset, icon, description;
 	int tileSize, iconSize, damage, fireRate, fireRadius, splashRadius, costs, maxHealth, updates;
 	bool splash, explosionAtEnemy, hasShootingAnimation;
 	float splashFactor, freeze, damageIncrease;
 	int ucosts[4], udamage[4], ufirerate[4], ufireradius[4];
+	bool support = false;   /* a depot: no weapon, it supplies the towers around it */
+	SupportLevel sup[3];
 	Image iconImg;
 };
 
@@ -165,6 +177,10 @@ public:
 	int udamage[4], ucosts[4];
 	bool destroyed = false, showRadius = false, selected = false;
 	std::string name;
+	bool support = false;   /* a Resupply Depot */
+	SupportLevel sup[3];
+	const SupportLevel &supportNow() const { return sup[currentUpdate < 3 ? currentUpdate : 2]; }
+	float buffRate = 1.0f, healCarry = 0;   /* set every frame by the map from the depots around */
 private:
 	void checkEnemy();
 	void shoot(float x, float y);
@@ -194,6 +210,9 @@ public:
 	void sellTower(Tower *t);
 	void removeTower(Tower *t);
 	void checkTowers(int x, int y, int radius, int damage);
+	void applySupport();   /* every frame: the depots' faster fire and healing for the towers in their areas */
+	float supportGold(float x, float y, float killGold) const;   /* the extra gold a kill at this spot pays */
+	int supportTick = -1;
 
 	std::string path, id;
 	int difficulty, tileSize, mapW, mapH, cols, rows, money, lifes;

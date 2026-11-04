@@ -815,8 +815,11 @@ static void draw_radial(const Play &p)
 	if (p.menuKind == 1)
 	{
 		const TowerType &t = m->towerTypes[p.menuSel];
-		char b[200];
-		snprintf(b, sizeof b, "%s - %d $\nDMG: %d   FR: %.1fs   %s", t.name.c_str(), t.costs, t.damage, (float)t.fireRate / 1000, t.description.c_str());
+		char b[300];
+		if (t.support)
+			snprintf(b, sizeof b, "%s - %d $\n%s", t.name.c_str(), t.costs, support_text(t.sup[0], m->tileSize).c_str());
+		else
+			snprintf(b, sizeof b, "%s - %d $\nDMG: %d   FR: %.1fs   %s", t.name.c_str(), t.costs, t.damage, (float)t.fireRate / 1000, t.description.c_str());
 		info_box(b);
 	}
 	else if (p.menuTower)
@@ -1290,6 +1293,16 @@ int main()
 					proc_mem_kb(rss, peak);
 					printf("DBG frame %d  wave %d/%d  towers %d  money %d  lives %d  fps %d  rss %ld kB (peak %ld)  avg ms per frame: map+areas %.1f, list %.1f, sprites %.1f, bars/shots %.1f%s%s\n", autoFrames, am->waves->current + 1, (int)am->waves->waves.size(),
 					       (int)am->towers.size(), am->money, am->lifes, fps, rss, peak, sumMap / 300.0, sumList / 300.0, sumSprites / 300.0, sumBars / 300.0, optHQ ? "  [HQ graphics]" : "", am->showBuildAreas ? "  [build areas]" : "");
+					{
+						int dep = 0, sup = 0;
+						float best = 1;
+						for (size_t i = 0; i < am->towers.size(); i++)
+						{
+							if (am->towers[i]->support) dep++;
+							else if (am->towers[i]->buffRate > 1.0f) { sup++; if (am->towers[i]->buffRate > best) best = am->towers[i]->buffRate; }
+						}
+						if (dep) printf("DBG depots %d, towers supplied %d (best fire rate x%.2f)\n", dep, sup, best);
+					}
 					fflush(stdout);
 					sumMap = sumList = sumSprites = sumBars = 0;
 				}
