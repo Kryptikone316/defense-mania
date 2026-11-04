@@ -274,7 +274,7 @@ void gfx_present()
 		static struct timespec next;
 		if (capHz < 0)
 		{
-			capHz = cfg_num("fps_cap", 0);
+			capHz = cfg_num("fps_cap", 30);
 			clock_gettime(CLOCK_MONOTONIC, &next);
 		}
 		if (capHz >= 5)

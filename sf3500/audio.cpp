@@ -253,6 +253,10 @@ void music_update()
 {
 	if (!g_ok && !getenv("DM_MUSICTEST"))
 		return;
+	static int stressCount;   /* test hook: a new track every 25 frames, to shake out thread problems */
+	static const bool stress = getenv("DM_MUSIC_STRESS") != NULL;
+	if (stress && g_enabled && ++stressCount % 25 == 0)
+		pick_and_play();
 	if (g_loadState == 2)
 		finish_load();
 	else if (g_enabled && g_vorbis && g_voice && !sf3500_voice_playing(g_voice))

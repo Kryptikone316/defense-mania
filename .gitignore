@@ -1,4 +1,5 @@
 **/.DS_STORE
 /.idea
-**/DefenseMania-release-key.keystoreobj-sf3500/
+**/DefenseMania-release-key.keystore
+obj-sf3500/
 *.mipsel
