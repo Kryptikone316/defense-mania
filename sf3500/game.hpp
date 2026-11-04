@@ -158,7 +158,7 @@ public:
 	int drawnFrame = -1, dbgCol = -1, dbgRow = -1;   /* for the ghost hunt: the last frame this tower was drawn in, and with which picture */
 	const Sheet *sheetPtr() const { return sheet; }
 	void center(float &x, float &y) const;
-	std::string debugState() const;
+	std::string debugState(bool withName = true) const;
 	int costs, health, maxHealth, currentUpdate = 0, updates, towerTileSize;
 	int udamage[4], ucosts[4];
 	bool destroyed = false, showRadius = false, selected = false;

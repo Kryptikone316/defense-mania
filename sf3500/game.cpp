@@ -36,14 +36,16 @@ static bool frame_ok(const Sheet *s, int col, int row)
 {
 	return s && s->img.valid() && col >= 0 && row >= 0 && (s->tile <= 0 || ((col + 1) * s->tile <= s->img.w && (row + 1) * s->tile <= s->img.h));
 }
-struct DrawRec { const Sheet *s; int col, row; float cx, cy; };
+class Tower;
+struct DrawRec { const Sheet *s; int col, row; float cx, cy; const Tower *who; };
+static const Tower *g_curTower = NULL;   /* the tower whose display() is running */
 static DrawRec g_dr[96];
 static int g_drn = 0, g_mapFrame = 0;   /* the ghost hunt: every centred sprite of the frame is noted */
 static void frame_center(const Sheet *s, int col, int row, float cx, float cy, int alpha = 255, uint32_t tint = 0xFFFFFF)
 {
 	if (!frame_ok(s, col, row))
 		return;
-	if (g_drn < 96) { g_dr[g_drn].s = s; g_dr[g_drn].col = col; g_dr[g_drn].row = row; g_dr[g_drn].cx = cx; g_dr[g_drn].cy = cy; g_drn++; }
+	if (g_drn < 96) { g_dr[g_drn].s = s; g_dr[g_drn].col = col; g_dr[g_drn].row = row; g_dr[g_drn].cx = cx; g_dr[g_drn].cy = cy; g_dr[g_drn].who = g_curTower; g_drn++; }
 	draw_image_center(s->img, cx - camX, cy - camY, col * s->tile, row * s->tile, s->tile, s->tile, alpha, tint);
 }
 static void frame_corner(const Sheet *s, int col, int row, float x, float y, int alpha = 255, uint32_t tint = 0xFFFFFF)
@@ -597,14 +599,34 @@ void Tower::center(float &x, float &y) const
 	x = (position[0] + 0.5f) * tile;
 	y = ((position[1] + 0.5f) * tile) - ((towerTileSize - tile) / 2);
 }
-std::string Tower::debugState() const
+std::string Tower::debugState(bool withName) const
 {
 	char b[200];
-	snprintf(b, sizeof b, "tower %d,%d (%s) upgrade %d, picture col %d row %d, animation %d dir %d, shooting %d step %d, drawingCount %d, destroyed %d", position[0], position[1], name.c_str(), currentUpdate, dbgCol, dbgRow, animationState, towerDirection, (int)shooting, shootingAniState, drawingCount, (int)destroyed);
+	snprintf(b, sizeof b, "tower %d,%d (%s) upgrade %d, picture col %d row %d, animation %d dir %d, shooting %d step %d, drawingCount %d, destroyed %d", position[0], position[1], withName ? name.c_str() : "?", currentUpdate, dbgCol, dbgRow, animationState, towerDirection, (int)shooting, shootingAniState, drawingCount, (int)destroyed);
 	return b;
+}
+static void hexdump_obj(const void *p, size_t n)
+{
+	const unsigned char *b = (const unsigned char *)p;
+	for (size_t i = 0; i < n; i++)
+		printf("%02x%s", b[i], (i % 16 == 15) ? "\n" : " ");
+	printf("\n");
 }
 void Tower::display()
 {
+	if (position[0] < 0 || position[0] >= map->cols || position[1] < 0 || position[1] >= map->rows)
+	{
+		static int logged;   /* a tower that is nowhere on the map is memory that is not a tower any more: do not draw it */
+		if (logged++ < 5)
+		{
+			printf("GHOST-HUNT: a tower object %p holds position %d,%d (map is %d x %d): %s; first 96 bytes:\n", (const void *)this, position[0], position[1], map->cols, map->rows, debugState(false).c_str());
+			hexdump_obj(this, 96);
+			fflush(stdout);
+		}
+		return;
+	}
+	g_curTower = this;
+	struct Clear { ~Clear() { g_curTower = NULL; } } clearOnExit;
 	int tile = map->tileSize;
 	float cx = (position[0] + 0.5f) * tile, cy = ((position[1] + 0.5f) * tile) - ((towerTileSize - tile) / 2);
 	if (!destroyed)
@@ -1071,7 +1093,15 @@ void Map::display()
 				if (isTowerSheet && !matched && (g_dr[d].col % 9) <= 5 && g_dr[d].row < 8)
 				{
 					logged++;
-					printf("GHOST-HUNT frame %d: a tower picture (col %d row %d) was drawn at %.1f,%.1f where no tower is; camera %d,%d, %d sprites drawn\n", g_mapFrame, g_dr[d].col, g_dr[d].row, g_dr[d].cx, g_dr[d].cy, camX, camY, g_drn);
+					bool inList = false;
+					for (size_t i = 0; i < towers.size(); i++)
+						if (towers[i] == g_dr[d].who) inList = true;
+					printf("GHOST-HUNT frame %d: a tower picture (col %d row %d) was drawn at %.1f,%.1f where no tower is; camera %d,%d, %d sprites drawn; drawn by object %p (%s in the tower list, %d towers)\n", g_mapFrame, g_dr[d].col, g_dr[d].row, g_dr[d].cx, g_dr[d].cy, camX, camY, g_drn, (const void *)g_dr[d].who, inList ? "is" : "is NOT", (int)towers.size());
+					if (g_dr[d].who)
+					{
+						printf("  %s\n", g_dr[d].who->debugState(false).c_str());
+						hexdump_obj(g_dr[d].who, 96);
+					}
 					fflush(stdout);
 				}
 			}
