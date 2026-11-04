@@ -85,6 +85,7 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	if (maxHealth < 1) maxHealth = health = 1;
 	moveSpeed = (int)(def.num("movespeed") * sc.speed + 0.5f);
 	money = (int)(def.num("money") * sc.money + 0.5f);
+	goldValue = (float)def.num("money") * sc.money * sc.gold;
 	damage = (int)(def.num("damage") * map->difficulty * sc.damage + 0.5f);
 	animationSpeed = (float)def.num("animationspeed");
 	moveCount = gnow();
@@ -285,9 +286,8 @@ void Enemy::getDamage(int dmg, float freeze)
 		moveComplete = 999999999;
 		enemyAlive = false;
 		dieCount = gnow();
-		map->money += money;
+		map->stats.goldEarned += map->award(goldValue);
 		map->killPoints += money * 5;
-		map->stats.goldEarned += money;
 		map->stats.enemiesDefeated++;
 		sfx_play(SFX_DIE);
 	}
@@ -320,6 +320,24 @@ void Enemy::hitAnimation(const std::string &cs, int x)
 	hitCount = gnow();
 	hitX = x;
 	hitCharset = cs;
+}
+
+/* The gold a kill pays: the money value of the creature, times a factor for the difficulty (Hard has three times the health of Easy, so it
+ * pays a little more) and for how far into the match the wave is (late waves are far tougher than the first ones, and the gold has to
+ * keep up with that). Both rates are in defensemania.cfg. */
+static float gold_factor(int difficulty, int wave, int waves)
+{
+	float diff = 1.0f + (float)cfg_num("gold_difficulty_step", 0.15) * (difficulty - 1);
+	float growth = waves > 1 ? (float)cfg_num("gold_wave_growth", 0.8) * wave / (float)(waves - 1) : 0.0f;
+	return diff * (1.0f + growth);
+}
+int Map::award(float gold)
+{
+	moneyCarry += gold;
+	int g = (int)moneyCarry;
+	moneyCarry -= (float)g;
+	money += g;
+	return g;
 }
 
 /* ------------------------------------------------------------------ wave */
@@ -425,11 +443,17 @@ Waves::Waves(const std::string &path, Map *m, bool isEndless) : map(m), endless(
 		templates.push_back(en);
 		spacing.push_back(ws[i]->num("enemydistance"));
 		if (!endless)
-			waves.push_back(new Wave(spacing.back(), en, m, WaveScale()));
+		{
+			WaveScale sc;
+			sc.gold = gold_factor(m->difficulty, (int)i, (int)ws.size());
+			waves.push_back(new Wave(spacing.back(), en, m, sc));
+		}
 	}
 	if (endless && !templates.empty())
 	{
-		waves.push_back(new Wave(spacing[0], templates[0], m, WaveScale()));
+		WaveScale sc0;
+		sc0.gold = gold_factor(m->difficulty, 0, 1);
+		waves.push_back(new Wave(spacing[0], templates[0], m, sc0));
 		if (getenv("DM_ENDLESS_DUMP"))
 			for (int k = 0; k < 40; k++) { current = k; ensureNext(); }
 		current = 0;
@@ -450,6 +474,7 @@ void Waves::ensureNext()
 	sc.count = fminf(2.5f, 1.0f + (float)cfg_num("endless_count_growth", 0.03) * w);
 	sc.money = 1.0f + (float)cfg_num("endless_money_growth", 0.05) * w;
 	sc.damage = 1.0f + (float)cfg_num("endless_damage_growth", 0.04) * w;
+	sc.gold = gold_factor(map->difficulty, 0, 1);
 	size_t t = (size_t)w % templates.size();
 	int dist = (int)(spacing[t] * fmaxf(0.6f, 1.0f - 0.01f * w));
 	waves.push_back(new Wave(dist, templates[t], map, sc));

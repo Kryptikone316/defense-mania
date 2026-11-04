@@ -14,6 +14,10 @@ import math, os, re, sys
 import xml.etree.ElementTree as ET
 
 DATA = sys.argv[1]
+GOLD_STEP, GOLD_GROWTH = 0.15, 0.8   # the same as gold_difficulty_step / gold_wave_growth in defensemania.cfg (0, 0 = the original flat reward)
+
+def gold_factor(d, k, n):
+    return (1 + GOLD_STEP * (d - 1)) * (1 + (GOLD_GROWTH * k / (n - 1) if n > 1 else 0))
 
 def load(path):
     txt = open(path, encoding='utf-8', errors='replace').read()
@@ -80,7 +84,7 @@ def simulate(start, lives, towers, tile, waves, d, e, boost=1.0):
         leaks += math.ceil(n * (1 - f) - 1e-9)
         if leaks > lives - 1:
             return None
-        gold += gold_wave * f
+        gold += gold_wave * f * gold_factor(d, k, len(waves))
     return leaks
 
 def needed(start, lives, towers, tile, waves, d, boost=1.0):
@@ -112,7 +116,7 @@ for url in maps:
             cap = rho * gold * duration
             hp = sum(x[0] * x[3] for x in es) * d
             rows.append((k + 1, hp / cap, hp, n, gold, name.split()[0], lvl, gold / cost))
-            gold += sum(x[1] * x[3] for x in es)
+            gold += sum(x[1] * x[3] for x in es) * gold_factor(d, k, len(waves))
         top = max(rows, key=lambda r: r[1])
         need = needed(start, lives, towers, tile, waves, d)
         hasfreeze = any(t['freeze'] > 0 for t in towers)

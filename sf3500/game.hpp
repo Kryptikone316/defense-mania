@@ -27,6 +27,7 @@ class Map;
 /* how much tougher the creatures of a wave are than the map file says (endless mode) */
 struct WaveScale {
 	float hp = 1, speed = 1, count = 1, money = 1, damage = 1;
+	float gold = 1;   /* the gold a kill pays (the score still counts the plain money value) */
 };
 
 /* what happened in a match, for the sheet shown at the end */
@@ -85,6 +86,7 @@ private:
 	float moveVector[2], target[2];   /* a unit vector towards the next way point */
 	float animationSpeed;
 	int moveSpeed, money, damage, maxHealth, health;
+	float goldValue = 0;   /* what a kill pays out: money x the gold factor of the difficulty and the wave */
 	int start[2], end[2];
 	std::vector<std::pair<int, int> > way;
 	int wpPosition = 0;
@@ -195,6 +197,8 @@ public:
 
 	std::string path, id;
 	int difficulty, tileSize, mapW, mapH, cols, rows, money, lifes;
+	float moneyCarry = 0;   /* the fractions of gold not paid out yet, so small rewards still add up exactly */
+	int award(float gold);   /* pays out gold, returns the whole gold given */
 	Image565 mapImage, areasImage;   /* areasImage: the map with the build areas baked in, made the first time they are shown */
 	Image lightRay, hudTop, hudBottom, moneyImg, lifeImg, hudPause, hudPlay, hudBuild, hudMenu;
 	std::vector<int> tileType;   /* cols*rows */
