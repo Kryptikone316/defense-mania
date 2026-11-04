@@ -1,6 +1,7 @@
 #include "hwaudio.hpp"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
 #include <unistd.h>
@@ -14,6 +15,10 @@ static int    g_active = 0;
 typedef int (*fn_init_t)(void *device_name, int sample_rate, int channels);
 typedef int (*fn_play_t)(const void *buffer, int frame_count);
 typedef int (*fn_deinit_t)(void);
+static int fake_init(void *, int, int) { return 0; }   /* test builds: DM_FAKE_HWAUDIO=n plays into nothing, n times faster than real time */
+static int fake_play(const void *, int) { return 0; }
+static int fake_deinit(void) { return 0; }
+static int g_fakeSpeed = 0;
 
 static fn_init_t   p_init   = NULL;
 static fn_play_t   p_play   = NULL;
@@ -40,6 +45,7 @@ static void *audio_thread_fn(void *unused) {
     short chunk[HWAUDIO_CHUNK * 2];
     (void)unused;
     period_ns = (long)((long long)HWAUDIO_CHUNK * 1000000000LL / HWAUDIO_RATE); /* 10ms */
+    if (g_fakeSpeed > 1) period_ns /= g_fakeSpeed;
 
     clock_gettime(CLOCK_MONOTONIC, &next_wake);
 
@@ -115,6 +121,10 @@ static int try_init(void) {
 int hwaudio_init(void) {
     if (g_active) return 0;
 
+    if (getenv("DM_FAKE_HWAUDIO")) {
+        g_fakeSpeed = atoi(getenv("DM_FAKE_HWAUDIO"));
+        p_init = fake_init; p_play = fake_play; p_deinit = fake_deinit;
+    } else {
     g_handle = dlopen("/mnt/sdcard/cubegm/driver_sf3500.so", RTLD_NOW | RTLD_GLOBAL);
     if (!g_handle) {
         fprintf(stderr, "hwaudio: dlopen failed: %s\n", dlerror());
@@ -124,6 +134,7 @@ int hwaudio_init(void) {
     p_init   = (fn_init_t)  dlsym(g_handle, "sound_driver_init");
     p_play   = (fn_play_t)  dlsym(g_handle, "sound_driver_playframe");
     p_deinit = (fn_deinit_t)dlsym(g_handle, "sound_driver_deinit");
+    }
 
     if (!p_init || !p_play) {
         fprintf(stderr, "hwaudio: dlsym failed (init=%p play=%p)\n", (void*)p_init, (void*)p_play);

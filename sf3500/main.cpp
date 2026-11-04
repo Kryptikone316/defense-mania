@@ -1047,6 +1047,7 @@ static void proc_mem_kb(long &rss, long &peak)
 static volatile int g_screenNow = 0;
 static char g_mapNow[64] = "";
 extern "C" char __executable_start, etext;
+#ifdef __mips__
 static void crash_report(int sig, siginfo_t *si, void *ctx)
 {
 	ucontext_t *uc = (ucontext_t *)ctx;
@@ -1071,8 +1072,10 @@ static void crash_report(int sig, siginfo_t *si, void *ctx)
 	fflush(stderr);
 	_exit(139);
 }
+#endif
 static void crash_report_install()
 {
+#ifdef __mips__   /* the report reads MIPS registers; other builds (the address-sanitizer test build) keep their own handlers */
 	struct sigaction sa;
 	memset(&sa, 0, sizeof sa);
 	sa.sa_sigaction = crash_report;
@@ -1082,6 +1085,7 @@ static void crash_report_install()
 	sigaction(SIGFPE, &sa, NULL);
 	sigaction(SIGILL, &sa, NULL);
 	sigaction(SIGABRT, &sa, NULL);
+#endif
 }
 
 /* ------------------------------------------------------------------ main */
