@@ -36,10 +36,14 @@ static bool frame_ok(const Sheet *s, int col, int row)
 {
 	return s && s->img.valid() && col >= 0 && row >= 0 && (s->tile <= 0 || ((col + 1) * s->tile <= s->img.w && (row + 1) * s->tile <= s->img.h));
 }
+struct DrawRec { const Sheet *s; int col, row; float cx, cy; };
+static DrawRec g_dr[96];
+static int g_drn = 0, g_mapFrame = 0;   /* the ghost hunt: every centred sprite of the frame is noted */
 static void frame_center(const Sheet *s, int col, int row, float cx, float cy, int alpha = 255, uint32_t tint = 0xFFFFFF)
 {
 	if (!frame_ok(s, col, row))
 		return;
+	if (g_drn < 96) { g_dr[g_drn].s = s; g_dr[g_drn].col = col; g_dr[g_drn].row = row; g_dr[g_drn].cx = cx; g_dr[g_drn].cy = cy; g_drn++; }
 	draw_image_center(s->img, cx - camX, cy - camY, col * s->tile, row * s->tile, s->tile, s->tile, alpha, tint);
 }
 static void frame_corner(const Sheet *s, int col, int row, float x, float y, int alpha = 255, uint32_t tint = 0xFFFFFF)
@@ -587,6 +591,18 @@ void Tower::shoot(float x, float y)
 	sfx_play(freeze > 0 ? SFX_FREEZE : splash ? SFX_CATAPULT : SFX_ARROW);
 }
 
+void Tower::center(float &x, float &y) const
+{
+	int tile = map->tileSize;
+	x = (position[0] + 0.5f) * tile;
+	y = ((position[1] + 0.5f) * tile) - ((towerTileSize - tile) / 2);
+}
+std::string Tower::debugState() const
+{
+	char b[200];
+	snprintf(b, sizeof b, "tower %d,%d (%s) upgrade %d, picture col %d row %d, animation %d dir %d, shooting %d step %d, drawingCount %d, destroyed %d", position[0], position[1], name.c_str(), currentUpdate, dbgCol, dbgRow, animationState, towerDirection, (int)shooting, shootingAniState, drawingCount, (int)destroyed);
+	return b;
+}
 void Tower::display()
 {
 	int tile = map->tileSize;
@@ -613,6 +629,7 @@ void Tower::display()
 			}
 			if (shooting && shootingAniState < 3 && hasShootingAnimation)
 			{
+				dbgCol = (currentUpdate * 9) + shootingAniState + 3; dbgRow = towerDirection; if (frame_ok(sheet, dbgCol, dbgRow)) drawnFrame = g_mapFrame;
 				frame_center(sheet, (currentUpdate * 9) + shootingAniState + 3, towerDirection, cx, cy, 255, tint);
 				if ((int)gnow() - shootingCount > fireRate * 0.08f * (shootingAniState + 1) && shootingAniState < 3)
 					shootingAniState++;
@@ -629,6 +646,7 @@ void Tower::display()
 					}
 					animationCount = gnow();
 				}
+				dbgCol = (currentUpdate * 9) + animationState; dbgRow = towerDirection; if (frame_ok(sheet, dbgCol, dbgRow)) drawnFrame = g_mapFrame;
 				frame_center(sheet, (currentUpdate * 9) + animationState, towerDirection, cx, cy, 255, tint);
 			}
 			if ((float)((int)gnow() - fireCount) >= (fireRate / 1.0f))
@@ -954,6 +972,8 @@ int g_prof[5], g_profEnemies, g_profTowers;   /* ms spent in the parts of the la
 
 void Map::display()
 {
+	g_mapFrame++;
+	g_drn = 0;
 	uint32_t p0 = millis();
 	game_clock_advance();
 	if (showBuildAreas)
@@ -1024,6 +1044,39 @@ void Map::display()
 	for (size_t i = 0; i < g_graveyard.size(); i++)
 		delete g_graveyard[i];
 	g_graveyard.clear();
+	{
+		/* the ghost hunt: a tower drawn last frame but not this one, or a tower picture drawn where no tower is */
+		static int logged = 0;
+		if (logged < 60)
+		{
+			for (size_t i = 0; i < towers.size(); i++)
+				if (!towers[i]->destroyed && towers[i]->drawnFrame == g_mapFrame - 1)
+				{
+					logged++;
+					printf("GHOST-HUNT frame %d: a tower was not drawn this frame: %s; camera %d,%d, %d sprites drawn\n", g_mapFrame, towers[i]->debugState().c_str(), camX, camY, g_drn);
+					fflush(stdout);
+				}
+			for (int d = 0; d < g_drn; d++)
+			{
+				bool isTowerSheet = false, matched = false;
+				for (size_t i = 0; i < towers.size(); i++)
+					if (towers[i]->sheetPtr() == g_dr[d].s)
+					{
+						isTowerSheet = true;
+						float x, y;
+						towers[i]->center(x, y);
+						if (fabsf(x - g_dr[d].cx) < 0.6f && fabsf(y - g_dr[d].cy) < 0.6f)
+							matched = true;
+					}
+				if (isTowerSheet && !matched && (g_dr[d].col % 9) <= 5 && g_dr[d].row < 8)
+				{
+					logged++;
+					printf("GHOST-HUNT frame %d: a tower picture (col %d row %d) was drawn at %.1f,%.1f where no tower is; camera %d,%d, %d sprites drawn\n", g_mapFrame, g_dr[d].col, g_dr[d].row, g_dr[d].cx, g_dr[d].cy, camX, camY, g_drn);
+					fflush(stdout);
+				}
+			}
+		}
+	}
 	uint32_t p4 = millis();
 	g_prof[0] = (int)(p1 - p0);   /* map picture and build areas */
 	g_prof[1] = (int)(p2 - p1);   /* making the list of what to draw */
