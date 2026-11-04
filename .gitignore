@@ -3,3 +3,5 @@
 **/DefenseMania-release-key.keystore
 obj-sf3500/
 *.mipsel
+*.orig
+*.rej

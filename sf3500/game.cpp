@@ -210,6 +210,11 @@ void Enemy::display()
 		}
 		else
 			frozen = false;
+		if (!flying && (int)gnow() < glueUntil)
+		{
+			if (glueFactor < freezeFactorTemp) freezeFactorTemp = glueFactor;
+			if (tint == 0xFFFFFF) tint = 0xCCDD66;
+		}
 		if (damage > 0 && (float)((int)gnow() - fireCount) >= (fireRate / freezeFactorTemp))
 		{
 			map->checkTowers((int)position[0], (int)position[1], fireRadius, damage);
@@ -228,6 +233,19 @@ void Enemy::display()
 		checkWP();
 		float dt = (float)((int)gnow() - moveCount);
 		float px = ((float)moveSpeed / 1000) * dt;
+		if (!flying && px > 0)
+		{
+			Trap *bt = map->blockingTrap(position[0], position[1], moveVector[0], moveVector[1], px * freezeFactorTemp);
+			if (bt)   /* a boulder in the way: stop, and the first few creatures smash it */
+			{
+				px = 0;
+				if (bt->attackers < map->trapTypes[bt->type].attackers)
+				{
+					bt->attackers++;
+					bt->health -= (4.0f + maxHealth * 0.03f) * dt / 1000.0f;
+				}
+			}
+		}
 		static int traced;   /* a few lines in log.txt if an enemy ever leaps, to help find out why */
 		const bool trace = traced < 30;
 		float oldX = position[0], oldY = position[1];
@@ -339,6 +357,147 @@ static float gold_factor(int difficulty, int wave, int waves)
 	float growth = waves > 1 ? (float)cfg_num("gold_wave_growth", 0.8) * wave / (float)(waves - 1) : 0.0f;
 	return diff * (1.0f + growth);
 }
+/* ------------------------------------------------------------------ traps */
+bool Map::nearPath(float wx, float wy, float maxDist, float &px, float &py) const
+{
+	float best = 1e30f;
+	for (size_t i = 0; i + 1 < pathPts.size(); i++)
+	{
+		float ax = pathPts[i].first, ay = pathPts[i].second, bx = pathPts[i + 1].first, by = pathPts[i + 1].second;
+		float vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+		float t = l2 > 0 ? ((wx - ax) * vx + (wy - ay) * vy) / l2 : 0;
+		t = t < 0 ? 0 : t > 1 ? 1 : t;
+		float qx = ax + vx * t, qy = ay + vy * t, d = dist(wx, wy, qx, qy);
+		if (d < best) { best = d; px = qx; py = qy; }
+	}
+	return best <= maxDist;
+}
+
+int Map::trapCount(int type) const
+{
+	int n = 0;
+	for (size_t i = 0; i < traps.size(); i++)
+		if (traps[i].type == type) n++;
+	return n;
+}
+
+std::string Map::trapProblem(int type, float px, float py) const
+{
+	if (type < 0 || type >= (int)trapTypes.size()) return "No such trap";
+	const TrapType &t = trapTypes[type];
+	if (trapCount(type) >= t.cap) return "You can have no more of these";
+	if (money < t.costs) return "Not enough gold";
+	if (pathPts.size() >= 2 && (dist(px, py, pathPts.front().first, pathPts.front().second) < 90 || dist(px, py, pathPts.back().first, pathPts.back().second) < 90))
+		return "Too close to the start or the end";
+	for (size_t i = 0; i < traps.size(); i++)
+		if (dist(px, py, traps[i].x, traps[i].y) < 44) return "Too close to another trap";
+	return "";
+}
+
+bool Map::addTrap(int type, float px, float py)
+{
+	if (!trapProblem(type, px, py).empty())
+		return false;
+	const TrapType &t = trapTypes[type];
+	money -= t.costs;
+	Trap tr;
+	tr.type = type; tr.x = px; tr.y = py; tr.born = (int)gnow();
+	tr.charges = (float)t.charges; tr.health = (float)t.health;
+	traps.push_back(tr);
+	sfx_play(SFX_BUILD);
+	return true;
+}
+
+/* the first boulder in the way of a creature that is about to move step pixels along (mx, my): it stops in front of it */
+Trap *Map::blockingTrap(float x, float y, float mx, float my, float step)
+{
+	for (size_t i = 0; i < traps.size(); i++)
+	{
+		Trap &t = traps[i];
+		if (trapTypes[t.type].kind != "boulder" || t.health <= 0) continue;
+		float r = trapTypes[t.type].radius;
+		float tx = t.x - x, ty = t.y - y;
+		float ahead = tx * mx + ty * my;                   /* how far ahead along its direction the boulder is */
+		if (ahead <= 0) continue;                           /* already past it */
+		float side = fabsf(tx * my - ty * mx);              /* how far off to the side */
+		if (side < r && ahead - r <= step + 1) return &t;   /* its next step reaches the boulder */
+	}
+	return NULL;
+}
+
+void Map::updateTraps()
+{
+	int now = (int)gnow();
+	for (size_t i = 0; i < traps.size(); i++) traps[i].attackers = 0;
+	if (getenv("DM_TRAPLOG")) { static int last; if (now - last > 5000) { last = now; for (size_t i = 0; i < traps.size(); i++) printf("TRAPLOG %s health %.0f charges %.0f at game time %d\n", trapTypes[traps[i].type].kind.c_str(), traps[i].health, traps[i].charges, now); fflush(stdout); } }
+	if (!traps.empty() && waves && waves->started)
+	{
+		Wave *w = waves->waves[waves->current];
+		for (size_t i = 0; i < traps.size(); i++)
+		{
+			Trap &t = traps[i];
+			const TrapType &tt = trapTypes[t.type];
+			if (tt.kind == "boulder") continue;
+			for (size_t k = 0; k < w->list.size() && t.charges > 0; k++)
+			{
+				Enemy *e = w->list[k];
+				if (!e->alive() || e->flying || e->position[0] <= 0 || dist(e->position[0], e->position[1], t.x, t.y) > tt.radius) continue;
+				if (tt.kind == "glue")
+				{
+					e->glueFactor = now >= e->glueUntil ? tt.slow : (tt.slow < e->glueFactor ? tt.slow : e->glueFactor);
+					e->glueUntil = now + 250;
+				}
+				else if (tt.kind == "spikes")
+				{
+					int last = -100000;
+					size_t h = 0;
+					for (; h < t.hits.size(); h++) if (t.hits[h].first == e) { last = t.hits[h].second; break; }
+					if (now - last >= tt.interval)
+					{
+						e->hitByTower(tt.damage, 0);
+						t.charges -= 1;
+						if (h < t.hits.size()) t.hits[h].second = now; else t.hits.push_back(std::make_pair(e, now));
+					}
+				}
+			}
+			if (t.hits.size() > 64) t.hits.erase(t.hits.begin(), t.hits.begin() + 32);
+		}
+	}
+	for (size_t i = 0; i < traps.size();)
+	{
+		Trap &t = traps[i];
+		const TrapType &tt = trapTypes[t.type];
+		bool gone = (tt.kind == "spikes" && t.charges <= 0) || (tt.kind == "glue" && now - t.born > tt.duration) || (tt.kind == "boulder" && t.health <= 0);
+		if (gone) traps.erase(traps.begin() + i); else i++;
+	}
+}
+
+void Map::drawTraps()
+{
+	int now = (int)gnow();
+	for (size_t i = 0; i < traps.size(); i++)
+	{
+		const Trap &t = traps[i];
+		const TrapType &tt = trapTypes[t.type];
+		int alpha = 255;
+		if (tt.kind == "glue")
+		{
+			int left = tt.duration - (now - t.born);
+			alpha = left < 4000 ? 90 + left * 165 / 4000 : 255;   /* it dries up */
+		}
+		draw_image_center(tt.picture, t.x - camX, t.y - camY, 0, 0, -1, -1, alpha, 0xFFFFFF);
+		if (tt.kind == "boulder" && t.health < tt.health)
+		{
+			int w = 30, x = (int)(t.x - camX) - w / 2, y = (int)(t.y - camY) - 28;
+			fill_rect(x, y, w, 3, 0xCC0033);
+			fill_rect(x, y, (int)(w * (t.health > 0 ? t.health : 0) / tt.health), 3, 0x00CC33);
+			rect_outline(x - 1, y - 1, w + 2, 5, 0x323232);
+		}
+		else if (tt.kind == "spikes" && t.charges < tt.charges / 3)
+			fill_rect((int)(t.x - camX) - 8, (int)(t.y - camY) - 14, 16, 2, 0xFFAA33);   /* nearly worn out */
+	}
+}
+
 void Map::applySupport()
 {
 	int now = (int)gnow();
@@ -1021,6 +1180,30 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 		towerTypes.push_back(tt);
 	}
 
+	pathPts.push_back(std::make_pair((float)start[0], (float)start[1]));
+	for (size_t i = 0; i < way.size(); i++) pathPts.push_back(std::make_pair((float)way[i].first, (float)way[i].second));
+	pathPts.push_back(std::make_pair((float)end[0], (float)end[1]));
+	{
+		XNode tr;
+		if (xml_load("data/traps.xml", tr))
+		{
+			std::vector<const XNode *> tl = tr.list("trap");
+			for (size_t k = 0; k < tl.size(); k++)
+			{
+				TrapType t;
+				t.id = tl[k]->str("id"); t.name = tl[k]->str("name"); t.kind = tl[k]->str("kind");
+				t.text = tl[k]->text;
+				while (!t.text.empty() && isspace((unsigned char)t.text[0])) t.text.erase(0, 1);
+				while (!t.text.empty() && isspace((unsigned char)t.text[t.text.size() - 1])) t.text.resize(t.text.size() - 1);
+				t.costs = tl[k]->num("costs"); t.cap = tl[k]->num("cap"); t.charges = tl[k]->num("charges"); t.interval = tl[k]->num("interval");
+				t.duration = tl[k]->num("duration"); t.health = tl[k]->num("health"); t.attackers = tl[k]->num("attackers");
+				t.radius = tl[k]->flt("radius"); t.damage = tl[k]->flt("damage"); t.slow = tl[k]->flt("slow", 1);
+				load_image("data/traps/" + tl[k]->str("icon"), t.icon);
+				load_image("data/traps/" + tl[k]->str("picture"), t.picture);
+				trapTypes.push_back(t);
+			}
+		}
+	}
 	if (!load_image565(path + "/data/map.png", mapImage))
 		return;
 	load_image("data/hud_top.png", hudTop);
@@ -1130,6 +1313,7 @@ void Map::display()
 	uint32_t p0 = millis();
 	game_clock_advance();
 	applySupport();
+	updateTraps();
 	if (showBuildAreas)
 	{
 		if (areasImage.px.empty())   /* once: a copy of the map with the build areas blended in, so showing them costs nothing per frame */
@@ -1150,6 +1334,7 @@ void Map::display()
 	}
 	else
 		blit565_window(mapImage, camX, camY);
+	drawTraps();
 	uint32_t p1 = millis();
 	/* towers and enemies, back to front */
 	std::vector<DrawItem> items;

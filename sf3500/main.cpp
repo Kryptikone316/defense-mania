@@ -709,7 +709,8 @@ static Screen screen_after(Result &r, int &sel)
 struct Play {
 	Map *map = NULL;
 	float cx = 0, cy = 0, holdMs = 0;
-	int menuKind = 0;       /* 0 none, 1 build, 2 tower */
+	int menuKind = 0;       /* 0 none, 1 build, 2 tower, 3 trap */
+	float trapX = 0, trapY = 0;   /* where the trap menu is open (on the path) */
 	int menuSel = 0, menuTX = 0, menuTY = 0;
 	Tower *menuTower = NULL;
 	int started = 0;
@@ -771,7 +772,7 @@ static void info_box(const std::string &text)
 static void draw_radial(const Play &p)
 {
 	Map *m = p.map;
-	int count = p.menuKind == 1 ? (int)m->towerTypes.size() : 3;
+	int count = p.menuKind == 1 ? (int)m->towerTypes.size() : p.menuKind == 3 ? (int)m->trapTypes.size() : 3;
 	int iconSize = p.menuKind == 1 ? m->towerTypes[0].iconSize : 30;
 	float x, y, r;
 	radial_geometry(p, count, iconSize, x, y, r, p.menuTX, p.menuTY);
@@ -787,6 +788,12 @@ static void draw_radial(const Play &p)
 			img = &m->towerTypes[i].iconImg;
 			cost = m->towerTypes[i].costs;
 			dim = m->money < cost;
+		}
+		else if (p.menuKind == 3)
+		{
+			img = &m->trapTypes[i].icon;
+			cost = m->trapTypes[i].costs;
+			dim = m->money < cost || m->trapCount(i) >= m->trapTypes[i].cap;
 		}
 		else
 		{
@@ -812,7 +819,14 @@ static void draw_radial(const Play &p)
 		fill_rect((int)(ix - iconSize * 0.5f), (int)(iy + iconSize / 2 - 3), (int)iconSize, 13, 0x000000, 200);
 		draw_text(b, (int)ix, (int)(iy + iconSize / 2 - 3), 10, 0xFFFFFF, ALIGN_CENTER, 2);
 	}
-	if (p.menuKind == 1)
+	if (p.menuKind == 3)
+	{
+		const TrapType &t = m->trapTypes[p.menuSel];
+		char b[300];
+		snprintf(b, sizeof b, "%s - %d $   (%d of %d placed)\n%s", t.name.c_str(), t.costs, m->trapCount(p.menuSel), t.cap, t.text.c_str());
+		info_box(b);
+	}
+	else if (p.menuKind == 1)
 	{
 		const TowerType &t = m->towerTypes[p.menuSel];
 		char b[300];
@@ -932,13 +946,27 @@ static void play_input(Play &p, float dtMs)
 		return;
 	if (p.menuKind)
 	{
-		int count = p.menuKind == 1 ? (int)m->towerTypes.size() : 3;
+		int count = p.menuKind == 1 ? (int)m->towerTypes.size() : p.menuKind == 3 ? (int)m->trapTypes.size() : 3;
 		if (pressed(JK_LEFT) || pressed(JK_UP)) p.menuSel = (p.menuSel + count - 1) % count;
 		if (pressed(JK_RIGHT) || pressed(JK_DOWN)) p.menuSel = (p.menuSel + 1) % count;
 		if (pressed(JK_B)) close_menu(p);
 		else if (pressed(JK_A))
 		{
-			if (p.menuKind == 1)
+			if (p.menuKind == 3)
+			{
+				if (m->addTrap(p.menuSel, p.trapX, p.trapY)) p.menuKind = 0;
+				else
+				{
+					sfx_play(SFX_ERROR);
+					p.toast = "CANNOT PLACE THAT HERE";
+					std::string why = m->trapProblem(p.menuSel, p.trapX, p.trapY);
+					static std::string last;
+					last = why;
+					p.toast = last.c_str();
+					p.toastUntil = millis() + 1800;
+				}
+			}
+			else if (p.menuKind == 1)
 			{
 				m->addTower(p.menuSel, p.menuTX, p.menuTY);
 				p.menuKind = 0;
@@ -976,6 +1004,19 @@ static void play_input(Play &p, float dtMs)
 			p.menuTX = wx / m->tileSize;
 			p.menuTY = wy / m->tileSize;
 		}
+		else
+		{
+			float qx, qy;
+			if (!m->trapTypes.empty() && m->nearPath((float)wx, (float)wy, 30, qx, qy))   /* on the path: the trap menu */
+			{
+				p.menuKind = 3;
+				p.menuSel = 0;
+				p.trapX = qx;
+				p.trapY = qy;
+				p.menuTX = (int)qx / m->tileSize;
+				p.menuTY = (int)qy / m->tileSize;
+			}
+		}
 	}
 }
 
@@ -992,7 +1033,9 @@ static void play_draw(Play &p)
 		int tx = wx / m->tileSize, ty = wy / m->tileSize;
 		bool buildable = m->canBuild(wx, wy) && m->towerAt(wx, wy) == -1;
 		bool onTower = m->towerAt(wx, wy) != -1;
-		uint32_t col = onTower ? 0xFFE066 : buildable ? 0x66FF66 : 0xFF5050;
+		float qx, qy;
+		bool trapSpot = !onTower && !buildable && !m->trapTypes.empty() && m->nearPath((float)wx, (float)wy, 30, qx, qy);
+		uint32_t col = onTower ? 0xFFE066 : buildable ? 0x66FF66 : trapSpot ? 0xFFAA33 : 0xFF5050;
 		rect_outline(tx * m->tileSize - camX, ty * m->tileSize - camY, m->tileSize, m->tileSize, col, 190);
 		/* the pointer */
 		int x = (int)p.cx, y = (int)p.cy;

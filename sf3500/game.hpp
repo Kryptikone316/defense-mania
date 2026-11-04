@@ -72,6 +72,8 @@ public:
 	int maxHealthValue() const { return maxHealth; }
 	void calcFuture(int timeMs, float out[2]) const;
 
+	int glueUntil = 0;       /* stuck in glue until this game time */
+	float glueFactor = 1;    /* ... and moving at this fraction of the speed */
 	float moveComplete = 0, position[2];
 	bool enemyAlive = true, enemyDied = false, wayPointsSet = false, frozen = false;
 	int tileSize, moveDirection = 2, freezeCount = 0, freezeTime = 0;
@@ -208,6 +210,21 @@ private:
 	Enemy *shootAt = NULL;
 };
 
+/* path traps, set on the path by the player: Spikes hurt what crosses them, Glue slows, a Boulder blocks the path until it is smashed */
+struct TrapType {
+	std::string id, name, kind, text;
+	int costs = 0, cap = 0, charges = 0, interval = 0, duration = 0, health = 0, attackers = 0;
+	float radius = 0, damage = 0, slow = 1;
+	Image icon, picture;
+};
+struct Trap {
+	int type = 0, born = 0;
+	float x = 0, y = 0;
+	float charges = 0, health = 0;   /* spikes: hits left; boulder: health left */
+	int attackers = 0;               /* creatures smashing it this frame */
+	std::vector<std::pair<Enemy *, int> > hits;   /* spikes: when each creature was last hurt */
+};
+
 class Map {
 public:
 	Map(const std::string &mapPath, int difficulty, bool endless = false);
@@ -219,6 +236,16 @@ public:
 	void sellTower(Tower *t);
 	void removeTower(Tower *t);
 	void checkTowers(int x, int y, int radius, int damage);
+	std::vector<TrapType> trapTypes;
+	std::vector<Trap> traps;
+	std::vector<std::pair<float, float> > pathPts;   /* the path as a line: start, way points, end */
+	bool nearPath(float wx, float wy, float maxDist, float &px, float &py) const;
+	int trapCount(int type) const;
+	std::string trapProblem(int type, float px, float py) const;   /* "" when it can be placed */
+	bool addTrap(int type, float px, float py);
+	void updateTraps();
+	void drawTraps();
+	Trap *blockingTrap(float x, float y, float mx, float my, float step);
 	void applySupport();   /* every frame: the depots' faster fire and healing for the towers in their areas */
 	float supportGold(float x, float y, float killGold) const;   /* the extra gold a kill at this spot pays */
 	int supportTick = -1;
