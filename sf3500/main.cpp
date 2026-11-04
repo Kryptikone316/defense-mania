@@ -1044,6 +1044,15 @@ static void play_draw(Play &p)
 		draw_line(x - 7, y, x + 7, y, 0xFFFFFF);
 		draw_line(x, y - 7, x, y + 7, 0xFFFFFF);
 	}
+	if (p.menuKind == 3 && p.menuSel < (int)m->trapTypes.size())
+	{   /* where the trap will go, and what it reaches */
+		const TrapType &tt = m->trapTypes[p.menuSel];
+		float gx = p.trapX - camX, gy = p.trapY - camY;
+		bool bad = !m->trapProblem(p.menuSel, p.trapX, p.trapY).empty();
+		fill_circle(gx, gy, tt.radius, bad ? 0xFF6060 : 0xFFD070, 50);
+		circle_outline(gx, gy, tt.radius, bad ? 0xFF6060 : 0xFFD070, 220);
+		draw_image_center(tt.picture, gx, gy, 0, 0, -1, -1, 170, 0xFFFFFF);
+	}
 	if (p.menuKind)
 		draw_radial(p);
 	m->drawHud();

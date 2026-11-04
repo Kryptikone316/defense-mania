@@ -215,7 +215,7 @@ struct TrapType {
 	std::string id, name, kind, text;
 	int costs = 0, cap = 0, charges = 0, interval = 0, duration = 0, health = 0, attackers = 0;
 	float radius = 0, damage = 0, slow = 1;
-	Image icon, picture;
+	Image icon, picture, crack[2];   /* a boulder shows cracks as it is smashed */
 };
 struct Trap {
 	int type = 0, born = 0;

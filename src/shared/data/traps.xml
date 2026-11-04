@@ -2,5 +2,5 @@
   <traps>
     <trap id="spikes" name="Spikes" kind="spikes" costs="20" cap="4" radius="22" damage="14" charges="12" interval="900" icon="trap_icon1.png" picture="trap1.png">Wounds every creature that crosses it, until worn out. Not flyers.</trap>
     <trap id="glue" name="Glue" kind="glue" costs="25" cap="3" radius="38" slow="0.5" duration="25000" icon="trap_icon2.png" picture="trap2.png">Slows creatures on it to half speed for a while. Not flyers.</trap>
-    <trap id="boulder" name="Boulder" kind="boulder" costs="60" cap="2" radius="20" health="360" attackers="3" icon="trap_icon3.png" picture="trap3.png">Blocks the path: creatures stop and smash it. Not flyers.</trap>
+    <trap id="boulder" name="Boulder" kind="boulder" costs="60" cap="2" radius="20" health="360" attackers="3" icon="trap_icon3.png" picture="trap3.png" crack1="trap3_c1.png" crack2="trap3_c2.png">Blocks the path: creatures stop and smash it. Not flyers.</trap>
   </traps>

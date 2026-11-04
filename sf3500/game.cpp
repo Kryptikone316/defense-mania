@@ -486,6 +486,11 @@ void Map::drawTraps()
 			alpha = left < 4000 ? 90 + left * 165 / 4000 : 255;   /* it dries up */
 		}
 		draw_image_center(tt.picture, t.x - camX, t.y - camY, 0, 0, -1, -1, alpha, 0xFFFFFF);
+		if (tt.kind == "boulder" && tt.health > 0)
+		{
+			if (t.health < tt.health * 0.66f && tt.crack[0].valid()) draw_image_center(tt.crack[0], t.x - camX, t.y - camY);
+			if (t.health < tt.health * 0.33f && tt.crack[1].valid()) draw_image_center(tt.crack[1], t.x - camX, t.y - camY);
+		}
 		if (tt.kind == "boulder" && t.health < tt.health)
 		{
 			int w = 30, x = (int)(t.x - camX) - w / 2, y = (int)(t.y - camY) - 28;
@@ -1200,6 +1205,8 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 				t.radius = tl[k]->flt("radius"); t.damage = tl[k]->flt("damage"); t.slow = tl[k]->flt("slow", 1);
 				load_image("data/traps/" + tl[k]->str("icon"), t.icon);
 				load_image("data/traps/" + tl[k]->str("picture"), t.picture);
+				if (!tl[k]->str("crack1").empty()) load_image("data/traps/" + tl[k]->str("crack1"), t.crack[0]);
+				if (!tl[k]->str("crack2").empty()) load_image("data/traps/" + tl[k]->str("crack2"), t.crack[1]);
 				trapTypes.push_back(t);
 			}
 		}
