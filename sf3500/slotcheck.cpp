@@ -330,10 +330,23 @@ int pick_frames(const uint32_t *w, uint32_t out[NPICK])
 }
 
 /* the frame a slot shows: of the few that fit best at a glance, the first one no cell is far off from, else the best one */
-uint32_t pick_frame(const uint32_t *w, bool &found, float *errOut, const float *base, bool haveBase)
+uint32_t pick_frame(const uint32_t *w, bool &found, float *errOut, const float *base, bool haveBase, uint32_t hint = 0xFFFFFFFFu)
 {
-	uint32_t cand[NPICK];
-	int n = pick_frames(w, cand);
+	uint32_t cand[NPICK + 3];
+	int n = 0;
+	if (hint != 0xFFFFFFFFu)   /* the slot before held frame h: this one most likely holds h + 1 (or the same, or h + 2) */
+		for (uint32_t d = 1; d <= 3; d++)
+			if (frame_at(hint + (d == 3 ? 0 : d))) cand[n++] = hint + (d == 3 ? 0 : d);
+	{
+		uint32_t more[NPICK];
+		int m = pick_frames(w, more);
+		for (int i = 0; i < m; i++)
+		{
+			bool dup = false;
+			for (int j = 0; j < n; j++) if (cand[j] == more[i]) dup = true;
+			if (!dup) cand[n++] = more[i];
+		}
+	}
 	found = n > 0;
 	if (!n) return 0;
 	float e[NCELLS];
@@ -364,6 +377,7 @@ void *reader_main(void *)
 	for (int i = 0; i < PAIRS; i++) { lastWorstR[i] = -1; lastTimeR[i] = -100; }
 	int off = -1;
 	uint64_t lastCal = 0, lastStatus = now_us();
+	uint32_t prevF = 0xFFFFFFFFu;
 	uint32_t lastRep[PAIRS];
 	memset(lastRep, 0xFF, sizeof lastRep);
 	Stats st;
@@ -392,6 +406,7 @@ void *reader_main(void *)
 		}
 		if (off < 0)
 			off = 0;
+		prevF = 0xFFFFFFFFu;
 		for (int p = 0; p < PAIRS && !g_stop; p++)
 		{
 			n = g_sent;   /* a scan takes a while: frames keep coming, and slots get rewritten under it */
@@ -405,7 +420,7 @@ void *reader_main(void *)
 			uint64_t te0 = now_us();
 			bool found = false;
 			float errP[NCELLS];
-			uint32_t f = pick_frame(w.data(), found, errP, base, haveBase);
+			uint32_t f = pick_frame(w.data(), found, errP, base, haveBase, prevF);
 			if (!found)
 				continue;
 			const FrameRec *fa = frame_at(f);
@@ -417,6 +432,7 @@ void *reader_main(void *)
 			ma /= NCELLS;
 			evals++;
 			uint32_t chosen = f;
+			prevF = f;
 			float *err = errA;
 			float mean = ma;
 			evalMs += (now_us() - te0) / 1000.0;
