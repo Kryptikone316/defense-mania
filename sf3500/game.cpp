@@ -91,6 +91,7 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	if (def.num("attackrate") > 0) fireRate = def.num("attackrate");
 	if (def.num("attackradius") > 0) fireRadius = def.num("attackradius");
 	if (getenv("DM_ALLTHROW")) { thrower = true; liftTime = 1500; }   /* test hooks */
+	if (getenv("DM_THROWRANGE")) throwRange = (float)atof(getenv("DM_THROWRANGE"));
 	if (getenv("DM_ARMOR")) armor = (float)atof(getenv("DM_ARMOR"));
 	flying = def.num("flying") != 0 || getenv("DM_ALLFLY") != NULL;   /* the test hook makes every creature fly */
 	moveSpeed = (int)(def.num("movespeed") * sc.speed + 0.5f);
