@@ -1260,6 +1260,33 @@ void Map::applySupport()
 				t->healCarry -= (float)h;
 			}
 		}
+	}	/* soldiers standing in a depot's area mend too, lightly: a share (soldier_heal_share, half by default) of what it does for a tower */
+	if (!depots.empty() && dt > 0)
+	{
+		float share = cfg_num("soldier_heal_share", 0.5f);
+		for (size_t i = 0; i < soldiers.size(); i++)
+		{
+			Soldier &sd = soldiers[i];
+			if (soldierTypes[sd.type].roller || sd.health <= 0 || sd.health >= sd.maxHealth) continue;
+			float heal = 0;
+			for (size_t k = 0; k < depots.size(); k++)
+			{
+				float dx, dy;
+				depots[k]->center(dx, dy);
+				const SupportLevel &s = depots[k]->supportNow();
+				const TowerMods &dm = towerMods[depots[k]->typeIdx];
+				float range = s.range * dm.suprange;
+				if ((sd.x - dx) * (sd.x - dx) + (sd.y - dy) * (sd.y - dy) <= range * range && s.heal + dm.supheal > heal) heal = s.heal + dm.supheal;
+			}
+			if (heal <= 0) continue;
+			sd.healCarry += sd.maxHealth * heal * share / 100.0f * dt / 1000.0f;
+			if (sd.healCarry >= 1.0f)
+			{
+				float h = floorf(sd.healCarry);
+				sd.health = sd.health + h > sd.maxHealth ? sd.maxHealth : sd.health + h;
+				sd.healCarry -= h;
+			}
+		}
 	}
 }
 

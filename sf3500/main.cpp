@@ -349,7 +349,7 @@ static Screen screen_help(int &page)
 		  "Catapult and Canon: splash damage, good against swarms. They cannot hit flyers.\n"
 		  "Freeze: slows creatures, and slowed creatures take extra damage from every tower.\n"
 		  "Resupply Depot: no weapon. The towers around it fire faster and mend, and creatures that\n"
-		  "die inside its area pay extra gold.\n\n"
+		  "die inside its area pay extra gold. Soldiers standing in its area mend too, more slowly.\n\n"
 		  "Creatures hit towers too. A damaged tower can be repaired; a destroyed one is gone." },
 		{ "TRAPS",
 		  "Press A on the path itself, away from the green spots, to set a trap. Each kind has a\n"

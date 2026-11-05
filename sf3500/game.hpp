@@ -278,6 +278,7 @@ struct Soldier {
 	float zone = 0;   /* a guard holds the last stretch of the path before the keep, this many pixels of it */
 	float health = 0, maxHealth = 0, damage = 0, carry = 0, capTaken = 0, flashX = 0, flashY = 0;
 	bool moving = false;
+	float healCarry = 0;   /* mending from a Resupply Depot, in whole points not yet paid out */
 	float dealt = 0; int nhits = 0;   /* what it has done, for the log */
 	int face = 0, strikeAt = -100000;   /* which way it looks (a row of its sheet, the monsters' order: down, left, right, up) and when its last blow fell */
 	Enemy *target = NULL;
