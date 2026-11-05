@@ -1222,7 +1222,7 @@ Wave::Wave(int distance, const std::vector<const XNode *> &enemies, Map *map, co
 }
 Wave::~Wave() { for (size_t i = 0; i < list.size(); i++) delete list[i]; }
 
-void Wave::start() { wholeDistance = gnow(); starting = true; }
+void Wave::start() { wholeDistance = gnow(); starting = true; sent = true; }
 
 void Wave::calcEnemyDistance()
 {

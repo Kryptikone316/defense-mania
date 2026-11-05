@@ -128,12 +128,12 @@ public:
 	void splash(Enemy *e, float damage, int radius, float factor);
 	Enemy *checkEnemy(int x, int y, int radius, float freeze, bool groundOnly = false);
 	bool complete() const;
-	bool begun() const { return starting; }   /* the wave has been sent: it is on until its creatures are all gone */
+	bool begun() const { return sent && !complete(); }   /* the wave has been sent and its creatures are not all gone yet */
 	std::vector<Enemy *> list;
 	std::vector<Sheet *> nextIcons;
 private:
 	int enemyDistance, wholeDistance = 0, offset = 500;
-	bool starting = false;
+	bool starting = false, sent = false;
 };
 
 class Waves {
