@@ -37,6 +37,8 @@ struct Stats {
 	int trapsBuilt[4] = { 0 }, boulderThrows = 0;   /* by trap type; boulders thrown back at towers */
 	float depotGold = 0;                            /* the extra gold the Resupply Depots paid */
 	int researchDone = 0, specialsUsed = 0;         /* the Bastion */
+	float soldierDamage = 0;                        /* what they dealt (kept for the tests) */
+	int soldiersSent = 0, soldierKills = 0;         /* the garrison: soldiers sent out, creatures they defeated */
 	int enemiesDefeated = 0, enemiesLeaked = 0, shots = 0;
 	int playMs = 0;
 };
@@ -76,6 +78,7 @@ public:
 	void calcFuture(int timeMs, float out[2]) const;
 
 	float armor = 0;         /* flat damage taken off every hit (never more than three quarters of it) */
+	std::string kind;        /* vermin, giant or flyer: what the Bastion's soldiers are trained against */
 	bool thrower = false;    /* lifts a blocking boulder and hurls it at a tower nearby */
 	float throwRange = 150, throwDamage = 100;
 	int liftTime = 2500, liftStart = 0, liftTrapId = 0;
@@ -125,6 +128,7 @@ public:
 	void splash(Enemy *e, float damage, int radius, float factor);
 	Enemy *checkEnemy(int x, int y, int radius, float freeze, bool groundOnly = false);
 	bool complete() const;
+	bool begun() const { return starting; }   /* the wave has been sent: it is on until its creatures are all gone */
 	std::vector<Enemy *> list;
 	std::vector<Sheet *> nextIcons;
 private:
@@ -260,6 +264,24 @@ struct ResearchLine {
 	std::vector<ResearchTier> tier;
 	int done = 0;                           /* tiers finished */
 };
+/* the Bastion's soldiers: small mobile towers, one kind for each sort of creature, sent out from the keep for a while */
+struct SoldierType {
+	std::string id, name, text;
+	std::vector<std::string> vs;   /* creature kinds it is trained against */
+	float health = 0, damage = 0, pct = 0, rate = 1000, reach = 28, speed = 40, wear = 0, wearpct = 0;   /* pct: or this share of the target's full health, if that is more (so they still matter in late waves) */
+	bool pierce = false, ranged = false, roller = false;
+	Image picture;
+};
+struct Soldier {
+	int type = 0, born = 0, life = 0, nextHit = 0, retarget = 0, blockers = 0, capStart = 0, flashUntil = 0;
+	float s = 0, x = 0, y = 0, dirX = 1, dirY = 0;   /* s: how far along the path from its start */
+	float zone = 0;   /* a guard holds the last stretch of the path before the keep, this many pixels of it */
+	float health = 0, maxHealth = 0, damage = 0, carry = 0, capTaken = 0, flashX = 0, flashY = 0;
+	bool moving = false;
+	Enemy *target = NULL;
+	std::vector<std::pair<Enemy *, int> > hits;       /* a boulder roller: when each creature was last hit */
+};
+
 struct TowerMods {
 	float damage = 1, rate = 1, reach = 1, splash = 1, slowtime = 1, suprange = 1;
 	float chill = 0, slow = 0, ramp = 0, supheal = 0, supgold = 0;
@@ -311,6 +333,26 @@ public:
 	std::vector<TowerMods> towerMods;   /* by tower type */
 	std::vector<TrapMods> trapMods;     /* by trap type */
 	int researchActive = -1, researchLeft = 0;
+	/* soldiers */
+	std::vector<SoldierType> soldierTypes;
+	std::vector<Soldier> soldiers;
+	float soldierOff = 0.3f;     /* the share of its damage a soldier does to creatures it is not trained against */
+	int soldierTick = -1, soldierWave = -1;
+	std::vector<float> pathCum;
+	void ensurePathLen();
+	float pathLength();
+	void pathAt(float s, float &x, float &y, float &dx, float &dy);
+	float pathS(float x, float y);
+	void spawnSoldiers(int type, const ResearchTier &t);
+	void updateSoldiers();
+	void drawSoldiers();
+	Soldier *blockingSoldier(float x, float y, float mx, float my, float step);
+	void soldierDamage(float x, float y, float radius, float damage);
+	/* doctrines: every path (0 towers, 1 traps, 2 garrison, 3 command) pays a bonus for the tiers finished in it, however they are spread */
+	int pathTiers(int cat) const;
+	int doctrineLevel(int cat) const { int l = pathTiers(cat) / 3; return l > 3 ? 3 : l; }
+	int doctrineSeen[4] = { 0, 0, 0, 0 };
+	float soldierHpMul = 1, soldierDmgMul = 1, garrisonCd = 1, commandCd = 1;
 	int baseLifes = 10, extraLives = 0;
 	std::string researchProblem(int line) const;
 	bool startResearch(int line);
@@ -318,7 +360,10 @@ public:
 	void applyResearch();
 	int specialLine(const char *id) const;
 	int specialLevel(const char *id) const;
-	int specialReadyAt[4] = { 0, 0, 0, 0 };
+	bool researchSkipNow = false;   /* started while a wave was on: that wave does not count towards it */
+	bool announced[8] = { true, true, true, true, true, true, true, true };   /* the "ready" notice for an action has been shown since its last use */
+	void announceReady();
+	int specialReadyAt[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };   /* 0-3 the keep's actions, 4-7 the soldiers */
 	int rallyUntil = 0;
 	float rallyPower = 0;
 	int volleyUntil = 0;

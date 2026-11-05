@@ -3,80 +3,80 @@
     <waves>
 
     	<wave enemydistance="450">
-    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="4" money="3" movespeed="120" animationspeed="15" count="48" damage="0">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="4" money="3" movespeed="120" animationspeed="15" count="48" kind="vermin" damage="0">
             </enemy>
         </wave>
 
     	<wave enemydistance="400">
-    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="6" money="3" movespeed="120" animationspeed="15" count="64" damage="0">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="6" money="3" movespeed="120" animationspeed="15" count="64" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="spider" charset="../../river_side.xml/data/charset1.png" icon="../../river_side.xml/data/icon1.png" tilesize="64" maxhealth="4" money="2" movespeed="70" animationspeed="15" count="32" damage="0">
+    		<enemy name="spider" charset="../../river_side.xml/data/charset1.png" icon="../../river_side.xml/data/icon1.png" tilesize="64" maxhealth="4" money="2" movespeed="70" animationspeed="15" count="32" kind="vermin" damage="0">
             </enemy>
         </wave>
 
     	<wave enemydistance="400">
-    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="14" money="4" movespeed="85" animationspeed="12" count="48" damage="0">
+    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="14" money="4" movespeed="85" animationspeed="12" count="48" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="8" money="3" movespeed="120" animationspeed="15" count="32" damage="0">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="8" money="3" movespeed="120" animationspeed="15" count="32" kind="vermin" damage="0">
             </enemy>
         </wave>
 
     	<wave enemydistance="800">
-    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="51" money="8" movespeed="55" animationspeed="10" count="8" armor="2" attackradius="50" damage="2">
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="51" money="8" movespeed="55" animationspeed="10" count="8" armor="2" attackradius="50" damage="2" kind="giant">
             </enemy>
         </wave>
 
     	<wave enemydistance="400">
-    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="19" money="3" movespeed="120" animationspeed="15" count="56" damage="0">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="19" money="3" movespeed="120" animationspeed="15" count="56" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="36" money="4" movespeed="85" animationspeed="12" count="32" damage="0">
+    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="36" money="4" movespeed="85" animationspeed="12" count="32" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="90" money="8" movespeed="55" animationspeed="10" count="6" armor="2" attackradius="50" damage="2">
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="90" money="8" movespeed="55" animationspeed="10" count="6" armor="2" attackradius="50" damage="2" kind="giant">
             </enemy>
         </wave>
 
     	<wave enemydistance="400">
-    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="32" money="3" movespeed="120" animationspeed="15" count="72" damage="0">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="32" money="3" movespeed="120" animationspeed="15" count="72" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="60" money="4" movespeed="85" animationspeed="12" count="40" damage="0">
+    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="60" money="4" movespeed="85" animationspeed="12" count="40" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="151" money="8" movespeed="55" animationspeed="10" count="8" armor="2" attackradius="50" damage="2">
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="151" money="8" movespeed="55" animationspeed="10" count="8" armor="2" attackradius="50" damage="2" kind="giant">
             </enemy>
         </wave>
 
     	<wave enemydistance="700">
-    		<enemy name="troll" charset="../../../monsters/halftroll.png" icon="../../../monsters/halftroll_icon.png" tilesize="64" maxhealth="278" money="18" movespeed="40" animationspeed="8" count="5" armor="1" attackradius="60" damage="8" lifttime="2500" throwdamage="130" thrower="1" throwrange="160">
+    		<enemy name="troll" charset="../../../monsters/halftroll.png" icon="../../../monsters/halftroll_icon.png" tilesize="64" maxhealth="278" money="18" movespeed="40" animationspeed="8" count="5" armor="1" attackradius="60" damage="8" kind="giant" lifttime="2500" throwdamage="130" thrower="1" throwrange="160">
             </enemy>
-    		<enemy name="wyvern" charset="../../../monsters/wyvern.png" icon="../../../monsters/wyvern_icon.png" tilesize="64" maxhealth="84" money="10" movespeed="75" animationspeed="15" count="10" attackradius="65" damage="6" flying="1">
+    		<enemy name="wyvern" charset="../../../monsters/wyvern.png" icon="../../../monsters/wyvern_icon.png" tilesize="64" maxhealth="84" money="10" movespeed="75" animationspeed="15" count="10" attackradius="65" damage="6" flying="1" kind="flyer">
             </enemy>
         </wave>
 
     	<wave enemydistance="400">
-    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="69" money="3" movespeed="120" animationspeed="15" count="80" damage="0">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="69" money="3" movespeed="120" animationspeed="15" count="80" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="128" money="4" movespeed="85" animationspeed="12" count="48" damage="0">
+    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="128" money="4" movespeed="85" animationspeed="12" count="48" kind="vermin" damage="0">
             </enemy>
         </wave>
 
     	<wave enemydistance="600">
-    		<enemy name="troll" charset="../../../monsters/halftroll.png" icon="../../../monsters/halftroll_icon.png" tilesize="64" maxhealth="446" money="18" movespeed="40" animationspeed="8" count="5" armor="1" attackradius="60" damage="8" lifttime="2500" throwdamage="130" thrower="1" throwrange="160">
+    		<enemy name="troll" charset="../../../monsters/halftroll.png" icon="../../../monsters/halftroll_icon.png" tilesize="64" maxhealth="446" money="18" movespeed="40" animationspeed="8" count="5" armor="1" attackradius="60" damage="8" kind="giant" lifttime="2500" throwdamage="130" thrower="1" throwrange="160">
             </enemy>
-    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="156" money="8" movespeed="55" animationspeed="10" count="19" armor="2" attackradius="50" damage="2">
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="156" money="8" movespeed="55" animationspeed="10" count="19" armor="2" attackradius="50" damage="2" kind="giant">
             </enemy>
-    		<enemy name="wyvern" charset="../../../monsters/wyvern.png" icon="../../../monsters/wyvern_icon.png" tilesize="64" maxhealth="134" money="10" movespeed="75" animationspeed="15" count="8" attackradius="65" damage="6" flying="1">
+    		<enemy name="wyvern" charset="../../../monsters/wyvern.png" icon="../../../monsters/wyvern_icon.png" tilesize="64" maxhealth="134" money="10" movespeed="75" animationspeed="15" count="8" attackradius="65" damage="6" flying="1" kind="flyer">
             </enemy>
         </wave>
 
     	<wave enemydistance="400">
-    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="71" money="3" movespeed="120" animationspeed="15" count="72" damage="0">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="71" money="3" movespeed="120" animationspeed="15" count="72" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="132" money="4" movespeed="85" animationspeed="12" count="48" damage="0">
+    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="132" money="4" movespeed="85" animationspeed="12" count="48" kind="vermin" damage="0">
             </enemy>
-    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="331" money="8" movespeed="55" animationspeed="10" count="13" armor="2" attackradius="50" damage="2">
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="331" money="8" movespeed="55" animationspeed="10" count="13" armor="2" attackradius="50" damage="2" kind="giant">
             </enemy>
-    		<enemy name="troll" charset="../../../monsters/halftroll.png" icon="../../../monsters/halftroll_icon.png" tilesize="64" maxhealth="946" money="18" movespeed="40" animationspeed="8" count="6" armor="1" attackradius="60" damage="8" lifttime="2500" throwdamage="130" thrower="1" throwrange="160">
+    		<enemy name="troll" charset="../../../monsters/halftroll.png" icon="../../../monsters/halftroll_icon.png" tilesize="64" maxhealth="946" money="18" movespeed="40" animationspeed="8" count="6" armor="1" attackradius="60" damage="8" kind="giant" lifttime="2500" throwdamage="130" thrower="1" throwrange="160">
             </enemy>
-    		<enemy name="wyvern" charset="../../../monsters/wyvern.png" icon="../../../monsters/wyvern_icon.png" tilesize="64" maxhealth="284" money="10" movespeed="75" animationspeed="15" count="6" attackradius="65" damage="6" flying="1">
+    		<enemy name="wyvern" charset="../../../monsters/wyvern.png" icon="../../../monsters/wyvern_icon.png" tilesize="64" maxhealth="284" money="10" movespeed="75" animationspeed="15" count="6" attackradius="65" damage="6" flying="1" kind="flyer">
             </enemy>
         </wave>
     </waves>

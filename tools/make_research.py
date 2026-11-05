@@ -5,6 +5,8 @@ Each line has three tiers; a tier is (name, cost in gold, waves it takes, text s
            slowtime (percent), ramp (added to the damage ramp), suprange (percent), supheal (added percent of health per second), supgold (added gold per kill)
   traps:   trapdamage trapcharges trapduration traphealth (percent), trapcap (more allowed), trapslow (taken off the slow factor)
   keep:    lives (extra lives); specials: cooldown (seconds) power time (seconds)
+  garrison: soldiers sent from the keep: count (how many), health and damage (percent more), time (seconds they stay), cooldown (seconds), zone (pixels of the path before the keep they guard)
+Doctrines: every path (towers, traps, garrison, command) pays a bonus for the tiers finished in it, however they are spread over its lines: see Map::doctrineLevel
 Usage: make_research.py <the game's data folder>"""
 import os, sys
 DATA = sys.argv[1]
@@ -27,6 +29,10 @@ LINES = [
  ('rally', 'keep', 'rally', 'Rally', [T('Battle Cry', 'Towers fire 25% faster for 10 s, every 80 s', cooldown=80, power=25, time=10), T('War Drums', '35%, every 60 s', cooldown=60, power=35, time=10), T('Banner of Kings', '50%, every 45 s', cooldown=45, power=50, time=10)]),
  ('mend', 'keep', 'mend', 'Mend', [T('Field Repairs', 'Heals every tower by 40%, every 90 s', cooldown=90, power=40), T('Master Masons', '70%, every 70 s', cooldown=70, power=70), T('Rebuilt Overnight', '100%, every 50 s', cooldown=50, power=100)]),
  ('frost', 'keep', 'frost', 'Frost Horn', [T('Horn of Winter', 'Slows every creature to 60% for 6 s, every 100 s', cooldown=100, power=60, time=6), T('Howling Gale', '50% for 8 s, every 80 s', cooldown=80, power=50, time=8), T('Wintertide', '40% for 10 s, every 60 s', cooldown=60, power=40, time=10)]),
+ ('vermin', 'garrison', 'vermin', 'Vermin Hunters', [T('Rat Catchers', '2 hunters guard 350 px of path for 35 s, every 100 s', count=2, time=35, cooldown=100, zone=350), T('Hunters\' Guild', '3 hunters, 25% tougher, 450 px, 45 s, every 80 s', count=3, health=25, time=45, cooldown=80, zone=450), T('Exterminators', '4 hunters, 50% tougher, 20% harder, 550 px, 55 s, every 65 s', count=4, health=50, damage=20, time=55, cooldown=65, zone=550)]),
+ ('giant', 'garrison', 'giant', 'Giant Slayers', [T('Pike Squad', '2 slayers guard 350 px of path for 35 s, every 100 s', count=2, time=35, cooldown=100, zone=350), T('Giantbane Company', '3 slayers, 25% tougher, 450 px, 45 s, every 80 s', count=3, health=25, time=45, cooldown=80, zone=450), T('Titan Breakers', '4 slayers, 50% tougher, 20% harder, 550 px, 55 s, every 65 s', count=4, health=50, damage=20, time=55, cooldown=65, zone=550)]),
+ ('sky', 'garrison', 'sky', 'Skyguard', [T('Slingers', '2 skyguards guard 350 px of path for 35 s, every 100 s', count=2, time=35, cooldown=100, zone=350), T('Longbow Wing', '3 skyguards, 25% tougher, 450 px, 45 s, every 80 s', count=3, health=25, time=45, cooldown=80, zone=450), T('Skyguard Elite', '4 skyguards, 50% tougher, 20% harder, 550 px, 55 s, every 65 s', count=4, health=50, damage=20, time=55, cooldown=65, zone=550)]),
+ ('roller', 'garrison', 'roller', 'Boulder Rollers', [T('Rolling Stone', '1 boulder, every 110 s', count=1, cooldown=110), T('Heavy Boulder', '1 boulder, 40% sturdier, every 90 s', count=1, health=40, cooldown=90), T('Twin Boulders', '2 boulders, 60% sturdier, every 75 s', count=2, health=60, cooldown=75)]),
 ]
 def esc(s): return s.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
 out = ["<?xml version='1.0'?>\n  <research>\n"]

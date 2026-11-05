@@ -101,6 +101,7 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	maxHealth = health = (int)(def.num("maxhealth") * map->difficulty * sc.hp + 0.5f);
 	if (maxHealth < 1) maxHealth = health = 1;
 	armor = def.flt("armor");
+	kind = def.str("kind");
 	thrower = def.num("thrower") != 0;
 	throwRange = def.flt("throwrange", 150);
 	throwDamage = def.flt("throwdamage", 100) * tower_damage_factor(map->difficulty) * sc.damage;
@@ -297,6 +298,8 @@ void Enemy::display()
 					bt->health -= (4.0f + maxHealth * 0.03f) * dt / 1000.0f;
 				}
 			}
+			else if (map->blockingSoldier(position[0], position[1], moveVector[0], moveVector[1], px * freezeFactorTemp))
+				px = 0;   /* a soldier holds the path: stop and fight (a few creatures at a time; the rest walk on) */
 		}
 		static int traced;   /* a few lines in log.txt if an enemy ever leaps, to help find out why */
 		const bool trace = traced < 30;
@@ -688,6 +691,7 @@ bool Map::startResearch(int line)
 	stats.goldSpent += t.cost;
 	researchActive = line;
 	researchLeft = t.waves;
+	researchSkipNow = waves && waves->started && waves->current < (int)waves->waves.size() && waves->waves[waves->current]->begun();
 	sfx_play(SFX_BUILD);
 	return true;
 }
@@ -695,6 +699,7 @@ bool Map::startResearch(int line)
 void Map::researchWaveDone()
 {
 	if (researchActive < 0) return;
+	if (researchSkipNow) { researchSkipNow = false; return; }   /* the wave that was already on when it was started does not count */
 	if (--researchLeft > 0) return;
 	ResearchLine &r = research[researchActive];
 	const ResearchTier &t = r.tier[r.done];
@@ -741,21 +746,39 @@ void Map::applyResearch()
 			}
 			else if (r.id == "fortify")
 				lives += (int)t.get("lives");
+			else if (r.group == "garrison")
+				;   /* read when the soldiers go out: spawnSoldiers */
 		}
 	}
 	if (lives > extraLives) { lifes += lives - extraLives; extraLives = lives; }   /* the extra lives are added once */
+	/* doctrines: 3, 6 and 9 tiers finished in a path pay a bonus to everything in it */
+	int lt = doctrineLevel(0), lp = doctrineLevel(1), lg = doctrineLevel(2), lc = doctrineLevel(3);
+	for (size_t ti = 0; ti < towerMods.size(); ti++) { towerMods[ti].damage += 0.04f * lt; towerMods[ti].rate += 0.04f * lt; }
+	for (size_t ti = 0; ti < trapMods.size(); ti++) { trapMods[ti].damage += 0.06f * lp; trapMods[ti].charges += 0.06f * lp; trapMods[ti].health += 0.06f * lp; }
+	soldierHpMul = 1 + 0.06f * lg; soldierDmgMul = 1 + 0.06f * lg; garrisonCd = 1 - 0.06f * lg; commandCd = 1 - 0.08f * lc;
+	static const char *pathName[4] = { "Towers", "Traps", "Garrison", "Command" };
+	static const char *pathText[4] = { "towers +4% damage and fire rate", "traps +6% damage, charges and health", "soldiers +6% health and damage, 6% shorter waits", "actions wait 8% less" };
+	int levels[4] = { lt, lp, lg, lc };
+	for (int c = 0; c < 4; c++)
+		if (levels[c] > doctrineSeen[c])
+		{
+			doctrineSeen[c] = levels[c];
+			char b[160];
+			snprintf(b, sizeof b, "DOCTRINE %d:  %s - %s (each level)", levels[c], pathName[c], pathText[c]);
+			pushNotice(b);
+		}
 }
 
-/* the Bastion's specials: 0 Volley, 1 Rally, 2 Mend, 3 Frost Horn */
-static const char *kSpecialId[4] = { "volley", "rally", "mend", "frost" };
+/* the Bastion's actions: 0 Volley, 1 Rally, 2 Mend, 3 Frost Horn, then the soldiers: 4 Vermin Hunters, 5 Giant Slayers, 6 Skyguard, 7 Boulder Rollers */
+static const char *kSpecialId[8] = { "volley", "rally", "mend", "frost", "vermin", "giant", "sky", "roller" };
 
 std::string Map::specialProblem(int idx) const
 {
-	if (idx < 0 || idx > 3) return "No such action";
+	if (idx < 0 || idx > 7) return "No such action";
 	if (specialLevel(kSpecialId[idx]) <= 0) return "Not researched yet";
 	int left = specialReadyAt[idx] - (int)gnow();
 	if (left > 0) { char b[48]; snprintf(b, sizeof b, "Ready in %d s", (left + 999) / 1000); return b; }
-	if (defeated || !waves || !waves->started) return "Only while a wave is on";
+	if (defeated || !waves || !waves->started || waves->current >= (int)waves->waves.size() || !waves->waves[waves->current]->begun()) return "Only while a wave is on";
 	return "";
 }
 
@@ -766,8 +789,14 @@ bool Map::useSpecial(int idx)
 	const ResearchTier &t = r.tier[r.done - 1];
 	int now = (int)gnow();
 	float power = t.get("power"), time = t.get("time");
-	specialReadyAt[idx] = now + (int)(t.get("cooldown") * 1000);
+	announced[idx] = false;
+	specialReadyAt[idx] = now + (int)(t.get("cooldown") * 1000 * (idx >= 4 ? garrisonCd : commandCd));
 	stats.specialsUsed++;
+	if (idx >= 4)
+	{
+		spawnSoldiers(idx - 4, t);
+		return true;
+	}
 	if (idx == 0)   /* Volley: every creature near the keep takes a share of its health */
 	{
 		Wave *w = waves->waves[waves->current];
@@ -814,6 +843,294 @@ bool Map::useSpecial(int idx)
 		pushNotice("FROST HORN!  everything slows");
 	}
 	return true;
+}
+
+/* ------------------------------------------------------------------ the garrison: soldiers sent out from the keep */
+int Map::pathTiers(int cat) const
+{
+	int n = 0;
+	for (size_t i = 0; i < research.size(); i++)
+	{
+		const std::string &g = research[i].group;
+		int c = g == "tower" ? 0 : g == "trap" ? 1 : g == "garrison" ? 2 : (research[i].id == "fortify" ? -1 : 3);
+		if (c == cat) n += research[i].done;
+	}
+	return n;
+}
+
+void Map::ensurePathLen()
+{
+	if (pathCum.size() == pathPts.size()) return;
+	pathCum.assign(pathPts.size(), 0.0f);
+	for (size_t i = 1; i < pathPts.size(); i++)
+		pathCum[i] = pathCum[i - 1] + dist(pathPts[i - 1].first, pathPts[i - 1].second, pathPts[i].first, pathPts[i].second);
+}
+float Map::pathLength() { ensurePathLen(); return pathCum.empty() ? 0.0f : pathCum.back(); }
+
+void Map::pathAt(float sd, float &x, float &y, float &dx, float &dy)
+{
+	ensurePathLen();
+	if (pathPts.size() < 2) { x = y = 0; dx = 1; dy = 0; return; }
+	size_t i = 0;
+	while (i + 2 < pathPts.size() && pathCum[i + 1] < sd) i++;
+	float l = pathCum[i + 1] - pathCum[i];
+	float t = l > 0 ? (sd - pathCum[i]) / l : 0;
+	t = t < 0 ? 0 : t > 1 ? 1 : t;
+	x = pathPts[i].first + (pathPts[i + 1].first - pathPts[i].first) * t;
+	y = pathPts[i].second + (pathPts[i + 1].second - pathPts[i].second) * t;
+	dx = l > 0 ? (pathPts[i + 1].first - pathPts[i].first) / l : 1;
+	dy = l > 0 ? (pathPts[i + 1].second - pathPts[i].second) / l : 0;
+}
+
+float Map::pathS(float wx, float wy)
+{
+	ensurePathLen();
+	float best = 1e30f, bs = 0;
+	for (size_t i = 0; i + 1 < pathPts.size(); i++)
+	{
+		float ax = pathPts[i].first, ay = pathPts[i].second, bx = pathPts[i + 1].first, by = pathPts[i + 1].second;
+		float vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+		float t = l2 > 0 ? ((wx - ax) * vx + (wy - ay) * vy) / l2 : 0;
+		t = t < 0 ? 0 : t > 1 ? 1 : t;
+		float d = dist(wx, wy, ax + vx * t, ay + vy * t);
+		if (d < best) { best = d; bs = pathCum[i] + sqrtf(l2) * t; }
+	}
+	return bs;
+}
+
+static bool soldier_vs(const SoldierType &st, const Enemy *e)
+{
+	for (size_t i = 0; i < st.vs.size(); i++) if (st.vs[i] == e->kind) return true;
+	return false;
+}
+
+void Map::spawnSoldiers(int type, const ResearchTier &t)
+{
+	if (type < 0 || type >= (int)soldierTypes.size() || !waves) return;
+	const SoldierType &st = soldierTypes[type];
+	float len = pathLength();
+	int count = (int)t.get("count", 1), now = (int)gnow();
+	for (int i = 0; i < count; i++)
+	{
+		Soldier sd;
+		sd.type = type;
+		sd.born = now;
+		sd.life = st.roller ? 100000000 : (int)(t.get("time", 30) * 1000);
+		sd.maxHealth = sd.health = st.health * (1 + t.get("health") / 100) * soldierHpMul;
+		sd.damage = st.damage * (1 + t.get("damage") / 100) * soldierDmgMul;
+		sd.zone = t.get("zone", 450);
+		sd.s = len - 50 - i * (st.roller ? 60.0f : 18.0f);
+		if (sd.s < 40) sd.s = 40;
+		pathAt(sd.s, sd.x, sd.y, sd.dirX, sd.dirY);
+		sd.nextHit = now + 400;
+		soldiers.push_back(sd);
+		stats.soldiersSent++;
+	}
+	sfx_play(SFX_GO);
+	pushNotice(std::string(st.roller ? "ROLL!  " : "TO ARMS!  ") + st.name + (count > 1 ? "s" : "") + " leave the keep");
+}
+
+Soldier *Map::blockingSoldier(float x, float y, float mx, float my, float step)
+{
+	for (size_t i = 0; i < soldiers.size(); i++)
+	{
+		Soldier &sd = soldiers[i];
+		if (soldierTypes[sd.type].roller || sd.health <= 0 || sd.blockers >= 3) continue;
+		float tx = sd.x - x, ty = sd.y - y;
+		float ahead = tx * mx + ty * my, side = fabsf(tx * my - ty * mx);
+		if (ahead > 0 && side < 18 && ahead - 20 <= step + 1) { sd.blockers++; return &sd; }
+	}
+	return NULL;
+}
+
+void Map::soldierDamage(float x, float y, float radius, float dmg)
+{
+	if (soldiers.empty()) return;
+	int now = (int)gnow();
+	for (size_t i = 0; i < soldiers.size(); i++)
+	{
+		Soldier &sd = soldiers[i];
+		if (soldierTypes[sd.type].roller || sd.health <= 0 || dist(sd.x, sd.y, x, y) > radius) continue;
+		if (now - sd.capStart >= 1000) { sd.capStart = now; sd.capTaken = 0; }
+		float room = sd.maxHealth * (float)cfg_num("soldier_damage_cap", 15) / 100.0f - sd.capTaken;   /* a swarm cannot cut a soldier down in an instant */
+		if (room <= 0) continue;
+		float d = dmg > room ? room : dmg;
+		sd.capTaken += d;
+		sd.carry += d;
+		int whole = (int)sd.carry;
+		sd.carry -= (float)whole;
+		sd.health -= (float)whole;
+	}
+}
+
+void Map::updateSoldiers()
+{
+	if (soldiers.empty()) return;
+	int now = (int)gnow();
+	int dt = soldierTick < 0 ? 0 : now - soldierTick;
+	soldierTick = now;
+	if (dt < 0 || dt > 500) dt = 0;
+	if (!waves) return;
+	Wave *w = waves->waves[waves->current];
+	if (waves->current != soldierWave)
+	{
+		soldierWave = waves->current;   /* the creatures of the last wave are gone: forget them */
+		for (size_t i = 0; i < soldiers.size(); i++) { soldiers[i].target = NULL; soldiers[i].hits.clear(); soldiers[i].retarget = 0; }
+	}
+	float len = pathLength();
+	for (size_t i = 0; i < soldiers.size(); i++) soldiers[i].blockers = 0;
+	for (size_t i = 0; i < soldiers.size();)
+	{
+		Soldier &sd = soldiers[i];
+		const SoldierType &st = soldierTypes[sd.type];
+		bool gone = sd.health <= 0 || now - sd.born >= sd.life;
+		if (!gone && st.roller)
+		{
+			sd.s -= st.speed * dt / 1000.0f;   /* up the path, against the stream */
+			sd.moving = true;
+			if (sd.s < 60) gone = true;
+			pathAt(sd.s, sd.x, sd.y, sd.dirX, sd.dirY);
+			for (size_t k = 0; k < w->list.size() && !gone; k++)
+			{
+				Enemy *e = w->list[k];
+				if (!e->alive() || e->flying || e->position[0] <= 0 || dist(e->position[0], e->position[1], sd.x, sd.y) > st.reach) continue;
+				int last = -100000;
+				size_t h = 0;
+				for (; h < sd.hits.size(); h++) if (sd.hits[h].first == e) { last = sd.hits[h].second; break; }
+				if (now - last < (int)st.rate) continue;
+				if (h < sd.hits.size()) sd.hits[h].second = now; else sd.hits.push_back(std::make_pair(e, now));
+				float rd = sd.damage;
+				float rshare = e->maxHealthValue() * st.pct / 100.0f * (sd.damage / st.damage);
+				if (rshare > rd) rd = rshare;
+				stats.soldierDamage += rd;
+				e->hitByTower(rd, 0);
+				if (!e->alive()) stats.soldierKills++;
+				sd.health -= st.wear + st.wearpct / 100.0f * e->maxHealthValue();   /* the boulder wears with every creature it hits */
+				sfx_play(SFX_CRUMBLE);
+			}
+			if (sd.hits.size() > 96) sd.hits.erase(sd.hits.begin(), sd.hits.begin() + 48);
+		}
+		else if (!gone)
+		{
+			if (now >= sd.retarget || !sd.target || !sd.target->alive())
+			{
+				sd.retarget = now + 250;
+				sd.target = NULL;
+				float best = -1;
+				for (size_t k = 0; k < w->list.size(); k++)   /* the creature of its own kind that is furthest along the path, nearest the keep */
+				{
+					Enemy *e = w->list[k];
+					if (!e->alive() || e->position[0] <= 0 || (e->flying && !st.ranged) || !soldier_vs(st, e)) continue;
+					float es = pathS(e->position[0], e->position[1]);
+					if (es < len - sd.zone) continue;   /* beyond the stretch it guards: the towers' business */
+					if (es > best) { best = es; sd.target = e; }
+				}
+			}
+			sd.moving = false;
+			if (sd.target)
+			{
+				float d = dist(sd.x, sd.y, sd.target->position[0], sd.target->position[1]);
+				float es = pathS(sd.target->position[0], sd.target->position[1]);
+				if (d > st.reach * 0.85f && fabsf(es - sd.s) > 3)
+				{
+					sd.s += (es < sd.s ? -1.0f : 1.0f) * st.speed * dt / 1000.0f;
+					float lo = len - sd.zone > 60 ? len - sd.zone : 60;
+					sd.s = sd.s < lo ? lo : sd.s > len - 30 ? len - 30 : sd.s;
+					pathAt(sd.s, sd.x, sd.y, sd.dirX, sd.dirY);
+					sd.moving = true;
+				}
+			}
+			if (now >= sd.nextHit)
+			{
+				Enemy *tgt = NULL;
+				bool on = false;
+				float bestScore = 1e30f;
+				for (size_t k = 0; k < w->list.size(); k++)   /* in reach: its own kind first, then the nearest of anything else it can touch */
+				{
+					Enemy *e = w->list[k];
+					if (!e->alive() || e->position[0] <= 0 || (e->flying && !st.ranged)) continue;
+					float d = dist(sd.x, sd.y, e->position[0], e->position[1]);
+					if (d > st.reach) continue;
+					bool o = soldier_vs(st, e);
+					float score = d - (o ? 10000.0f : 0.0f);
+					if (score < bestScore) { bestScore = score; tgt = e; on = o; }
+				}
+				if (tgt)
+				{
+					float dmg = sd.damage * (on ? 1.0f : soldierOff);
+					if (on)
+					{
+						float share = tgt->maxHealthValue() * st.pct / 100.0f * (sd.damage / st.damage);
+						if (share > dmg) dmg = share;
+						if (st.pierce) dmg += tgt->armor;
+					}
+					stats.soldierDamage += dmg;
+					tgt->hitByTower(dmg, 0);
+					if (!tgt->alive()) stats.soldierKills++;
+					sd.nextHit = now + (int)st.rate;
+					sd.flashX = tgt->position[0]; sd.flashY = tgt->position[1];
+					sd.flashUntil = (int)millis() + 140;
+					if (st.ranged) sfx_play(SFX_ARROW);
+				}
+				else sd.nextHit = now + 100;
+			}
+		}
+		if (getenv("DM_SOLDLOG"))
+		{
+			static int lastLog;
+			if (now - lastLog > 1500 && i == 0)
+			{
+				lastLog = now;
+				float nearest = 1e9f; int onKind = 0;
+				for (size_t k = 0; k < w->list.size(); k++) { Enemy *e = w->list[k]; if (!e->alive() || e->position[0] <= 0) continue; if (soldier_vs(st, e)) onKind++; float d = dist(sd.x, sd.y, e->position[0], e->position[1]); if (d < nearest) nearest = d; }
+				printf("SOLDLOG t=%d type %s n=%d s=%.0f/%.0f pos %.0f,%.0f hp %.0f/%.0f target %s onkind alive %d nearest %.0f age %d/%d\n", now, st.id.c_str(), (int)soldiers.size(), sd.s, len, sd.x, sd.y, sd.health, sd.maxHealth, sd.target ? "yes" : "no", onKind, nearest, now - sd.born, sd.life);
+				fflush(stdout);
+			}
+		}
+		if (gone) soldiers.erase(soldiers.begin() + i); else i++;
+	}
+}
+
+void Map::drawSoldiers()
+{
+	int now = (int)gnow();
+	const Image *boulder = NULL;
+	for (size_t k = 0; k < trapTypes.size(); k++) if (trapTypes[k].kind == "boulder") boulder = &trapTypes[k].picture;
+	for (size_t i = 0; i < soldiers.size(); i++)
+	{
+		const Soldier &sd = soldiers[i];
+		const SoldierType &st = soldierTypes[sd.type];
+		float bob = sd.moving ? sinf(now / 90.0f + (float)i) * 1.5f : 0;
+		float x = sd.x - camX, y = sd.y - camY;
+		if (st.roller)
+		{
+			draw_image_center(st.picture, x + sd.dirX * 26, y + sd.dirY * 26 - 12 + bob, 0, 0, -1, -1, 255, 0xFFFFFF);   /* the pusher stands behind the boulder */
+			if (boulder && boulder->valid()) draw_image_center(*boulder, x, y, 0, 0, -1, -1, 255, 0xFFFFFF);
+		}
+		else
+		{
+			if ((int)millis() < sd.flashUntil) draw_line((int)x, (int)(y - 12), (int)(sd.flashX - camX), (int)(sd.flashY - camY - 10), 0xFFFFFF);
+			draw_image_center(st.picture, x, y - 12 + bob, 0, 0, -1, -1, 255, 0xFFFFFF);
+		}
+		if (sd.health < sd.maxHealth)
+		{
+			int bw = 22, bx = (int)x - bw / 2, by = (int)y - (st.roller ? 30 : 32);
+			fill_rect(bx, by, bw, 3, 0xCC0033);
+			fill_rect(bx, by, (int)(bw * (sd.health > 0 ? sd.health : 0) / sd.maxHealth), 3, 0x3399FF);
+			rect_outline(bx - 1, by - 1, bw + 2, 5, 0x323232);
+		}
+	}
+}
+
+void Map::announceReady()
+{
+	static const char *nm[8] = { "VOLLEY", "RALLY", "MEND", "FROST HORN", "VERMIN HUNTERS", "GIANT SLAYERS", "SKYGUARD", "BOULDER ROLLERS" };
+	for (int i = 0; i < 8; i++)
+		if (!announced[i] && (int)gnow() >= specialReadyAt[i])
+		{
+			announced[i] = true;
+			pushNotice(std::string(nm[i]) + " READY");
+		}
 }
 
 void Map::applySupport()
@@ -1587,6 +1904,33 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 			}
 		}
 	}
+	{
+		XNode so;
+		if (xml_load("data/soldiers.xml", so))
+		{
+			soldierOff = so.flt("off", 0.3f);
+			std::vector<const XNode *> sl = so.list("soldier");
+			for (size_t k = 0; k < sl.size(); k++)
+			{
+				SoldierType t;
+				t.id = sl[k]->str("id"); t.name = sl[k]->str("name"); t.text = sl[k]->text;
+				while (!t.text.empty() && isspace((unsigned char)t.text[0])) t.text.erase(0, 1);
+				t.health = sl[k]->flt("health"); t.damage = sl[k]->flt("damage"); t.pct = sl[k]->flt("pct"); t.rate = sl[k]->flt("rate", 1000); t.reach = sl[k]->flt("reach", 28); t.speed = sl[k]->flt("speed", 40);
+				t.wear = sl[k]->flt("wear"); t.wearpct = sl[k]->flt("wearpct");
+				t.pierce = sl[k]->num("pierce") != 0; t.ranged = sl[k]->num("ranged") != 0; t.roller = sl[k]->num("roller") != 0;
+				std::string vs = sl[k]->str("vs");
+				for (size_t a = 0; a < vs.size();)
+				{
+					size_t b = vs.find(' ', a);
+					if (b == std::string::npos) b = vs.size();
+					if (b > a) t.vs.push_back(vs.substr(a, b - a));
+					a = b + 1;
+				}
+				load_image("data/soldiers/" + sl[k]->str("picture"), t.picture);
+				soldierTypes.push_back(t);
+			}
+		}
+	}
 	towerMods.assign(towerTypes.size(), TowerMods());
 	trapMods.assign(trapTypes.size(), TrapMods());
 	if (!load_image565(path + "/data/map.png", mapImage))
@@ -1685,6 +2029,7 @@ void Map::checkTowers(int x, int y, int radius, float damage)
 	for (size_t i = 0; i < towers.size(); i++)
 		if (dist((towers[i]->position[0] + 0.5f) * tileSize, (towers[i]->position[1] + 0.5f) * tileSize, (float)x, (float)y) <= radius)
 			towers[i]->enemyDamage(damage, true);
+	soldierDamage((float)x, (float)y, (float)radius, damage);
 }
 
 struct DrawItem { float y; Tower *tower; Enemy *enemy; };
@@ -1700,6 +2045,8 @@ void Map::display()
 	game_clock_advance();
 	applySupport();
 	updateTraps();
+	updateSoldiers();
+	announceReady();
 	updateNotices();
 	if (showBuildAreas)
 	{
@@ -1761,6 +2108,7 @@ void Map::display()
 		if (items[i].tower) items[i].tower->display();
 		else items[i].enemy->display();
 	}
+	drawSoldiers();
 	uint32_t p3 = millis();
 	if (waves)
 		waves->displayGui();

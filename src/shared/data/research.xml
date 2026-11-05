@@ -70,4 +70,24 @@
       <tier name="Howling Gale" cost="200" waves="2" cooldown="80" power="50" time="8">50% for 8 s, every 80 s</tier>
       <tier name="Wintertide" cost="350" waves="3" cooldown="60" power="40" time="10">40% for 10 s, every 60 s</tier>
     </line>
+    <line id="vermin" group="garrison" target="vermin" title="Vermin Hunters">
+      <tier name="Rat Catchers" cost="100" waves="1" cooldown="100" count="2" time="35" zone="350">2 hunters guard 350 px of path for 35 s, every 100 s</tier>
+      <tier name="Hunters' Guild" cost="200" waves="2" cooldown="80" count="3" health="25" time="45" zone="450">3 hunters, 25% tougher, 450 px, 45 s, every 80 s</tier>
+      <tier name="Exterminators" cost="350" waves="3" cooldown="65" count="4" damage="20" health="50" time="55" zone="550">4 hunters, 50% tougher, 20% harder, 550 px, 55 s, every 65 s</tier>
+    </line>
+    <line id="giant" group="garrison" target="giant" title="Giant Slayers">
+      <tier name="Pike Squad" cost="100" waves="1" cooldown="100" count="2" time="35" zone="350">2 slayers guard 350 px of path for 35 s, every 100 s</tier>
+      <tier name="Giantbane Company" cost="200" waves="2" cooldown="80" count="3" health="25" time="45" zone="450">3 slayers, 25% tougher, 450 px, 45 s, every 80 s</tier>
+      <tier name="Titan Breakers" cost="350" waves="3" cooldown="65" count="4" damage="20" health="50" time="55" zone="550">4 slayers, 50% tougher, 20% harder, 550 px, 55 s, every 65 s</tier>
+    </line>
+    <line id="sky" group="garrison" target="sky" title="Skyguard">
+      <tier name="Slingers" cost="100" waves="1" cooldown="100" count="2" time="35" zone="350">2 skyguards guard 350 px of path for 35 s, every 100 s</tier>
+      <tier name="Longbow Wing" cost="200" waves="2" cooldown="80" count="3" health="25" time="45" zone="450">3 skyguards, 25% tougher, 450 px, 45 s, every 80 s</tier>
+      <tier name="Skyguard Elite" cost="350" waves="3" cooldown="65" count="4" damage="20" health="50" time="55" zone="550">4 skyguards, 50% tougher, 20% harder, 550 px, 55 s, every 65 s</tier>
+    </line>
+    <line id="roller" group="garrison" target="roller" title="Boulder Rollers">
+      <tier name="Rolling Stone" cost="100" waves="1" cooldown="110" count="1">1 boulder, every 110 s</tier>
+      <tier name="Heavy Boulder" cost="200" waves="2" cooldown="90" count="1" health="40">1 boulder, 40% sturdier, every 90 s</tier>
+      <tier name="Twin Boulders" cost="350" waves="3" cooldown="75" count="2" health="60">2 boulders, 60% sturdier, every 75 s</tier>
+    </line>
   </research>

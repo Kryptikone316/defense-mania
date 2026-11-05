@@ -10,16 +10,16 @@ exec(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'check_maps.p
 
 SPIDER = '../../river_side.xml/data/'   # the original sheets live with River Side
 NEW = '../../../monsters/'
-# name: sheet, icon, health relative to a spider, speed, animation, gold, extra attributes
+# name: sheet, icon, health relative to a spider, speed, animation, gold, extra attributes (kind: what the Bastion's soldiers are trained against: vermin, giant or flyer)
 MON = {
- 'spider': (SPIDER + 'charset1.png', SPIDER + 'icon1.png', 1.0, 70, 15, 2, {}),
- 'brood':  (NEW + 'brood.png', NEW + 'brood_icon.png', 1.7, 66, 15, 3, {'armor': 1, 'damage': 1, 'attackradius': 45}),
- 'warg':   (NEW + 'warg.png', NEW + 'warg_icon.png', 1.5, 120, 15, 3, {}),
- 'gnoll':  (NEW + 'gnoll.png', NEW + 'gnoll_icon.png', 2.8, 85, 12, 4, {}),
- 'orc':    (NEW + 'orc.png', NEW + 'orc_icon.png', 7.0, 55, 10, 8, {'armor': 2, 'damage': 2, 'attackradius': 50}),
- 'ogre':   (SPIDER + 'charset2.png', SPIDER + 'icon2.png', 14.0, 45, 8, 12, {'damage': 4, 'attackradius': 55, 'thrower': 1, 'throwrange': 150, 'throwdamage': 90, 'lifttime': 2500}),
- 'troll':  (NEW + 'halftroll.png', NEW + 'halftroll_icon.png', 20.0, 40, 8, 18, {'armor': 1, 'damage': 8, 'attackradius': 60, 'thrower': 1, 'throwrange': 160, 'throwdamage': 130, 'lifttime': 2500}),
- 'wyvern': (NEW + 'wyvern.png', NEW + 'wyvern_icon.png', 6.0, 75, 15, 10, {'flying': 1, 'damage': 6, 'attackradius': 65}),
+ 'spider': (SPIDER + 'charset1.png', SPIDER + 'icon1.png', 1.0, 70, 15, 2, {'kind': 'vermin'}),
+ 'brood':  (NEW + 'brood.png', NEW + 'brood_icon.png', 1.7, 66, 15, 3, {'kind': 'vermin', 'armor': 1, 'damage': 1, 'attackradius': 45}),
+ 'warg':   (NEW + 'warg.png', NEW + 'warg_icon.png', 1.5, 120, 15, 3, {'kind': 'vermin'}),
+ 'gnoll':  (NEW + 'gnoll.png', NEW + 'gnoll_icon.png', 2.8, 85, 12, 4, {'kind': 'vermin'}),
+ 'orc':    (NEW + 'orc.png', NEW + 'orc_icon.png', 7.0, 55, 10, 8, {'kind': 'giant', 'armor': 2, 'damage': 2, 'attackradius': 50}),
+ 'ogre':   (SPIDER + 'charset2.png', SPIDER + 'icon2.png', 14.0, 45, 8, 12, {'kind': 'giant', 'damage': 4, 'attackradius': 55, 'thrower': 1, 'throwrange': 150, 'throwdamage': 90, 'lifttime': 2500}),
+ 'troll':  (NEW + 'halftroll.png', NEW + 'halftroll_icon.png', 20.0, 40, 8, 18, {'kind': 'giant', 'armor': 1, 'damage': 8, 'attackradius': 60, 'thrower': 1, 'throwrange': 160, 'throwdamage': 130, 'lifttime': 2500}),
+ 'wyvern': (NEW + 'wyvern.png', NEW + 'wyvern_icon.png', 6.0, 75, 15, 10, {'kind': 'flyer', 'flying': 1, 'damage': 6, 'attackradius': 65}),
 }
 def ramp(n, lo, hi, dips=()):
     out = [lo + (hi - lo) * (k / (n - 1.0)) ** 1.15 for k in range(n)]

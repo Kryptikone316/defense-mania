@@ -20,7 +20,7 @@
 static const float PI_F = 3.14159265f;
 static const uint32_t GOLD = 0xFFF8C8;
 
-enum Screen { S_MAIN, S_PLAY, S_OPTIONS, S_CREDITS, S_SCORES, S_LOADING, S_GAME, S_AFTER, S_QUIT };
+enum Screen { S_MAIN, S_PLAY, S_HELP, S_OPTIONS, S_CREDITS, S_SCORES, S_LOADING, S_GAME, S_AFTER, S_QUIT };
 
 /* ------------------------------------------------------------------ pad */
 static unsigned padNow, padPrev;
@@ -296,28 +296,111 @@ static void load_maps()
 
 static Screen screen_main(int &sel)
 {
-	static const char *labels[5] = { "PLAY", "SCORES", "CREDITS", "OPTIONS", "EXIT" };
+	static const char *labels[6] = { "PLAY", "HOW TO PLAY", "SCORES", "CREDITS", "OPTIONS", "EXIT" };
+	static const int widths[6] = { 80, 150, 92, 92, 92, 70 };
 	gfx_clear(0, 0, 0);
 	if (logo.valid())
 	{
 		int w = logo.w * 62 / 100, h = logo.h * 62 / 100;
 		draw_image_scaled(logo, (SW - w) / 2, 8, w, h);
 	}
-	int bw = 112, gap = (SW - bw * 5) / 6;
-	for (int i = 0; i < 5; i++)
-		draw_button(labels[i], gap + i * (bw + gap), SH - 62, bw, 26, i == sel, 20);
+	int total = 0;
+	for (int i = 0; i < 6; i++) total += widths[i];
+	int gap = (SW - total) / 7, x = gap;
+	for (int i = 0; i < 6; i++)
+	{
+		draw_button(labels[i], x, SH - 62, widths[i], 26, i == sel, 16);
+		x += widths[i] + gap;
+	}
 	draw_hint("D-Pad: choose    A: select");
-	if (pressed(JK_LEFT)) sel = (sel + 4) % 5;
-	if (pressed(JK_RIGHT)) sel = (sel + 1) % 5;
+	if (pressed(JK_LEFT)) sel = (sel + 5) % 6;
+	if (pressed(JK_RIGHT)) sel = (sel + 1) % 6;
 	if (pressed(JK_A))
 	{
 		if (sel == 0) return S_PLAY;
-		if (sel == 1) return S_SCORES;
-		if (sel == 2) return S_CREDITS;
-		if (sel == 3) return S_OPTIONS;
+		if (sel == 1) return S_HELP;
+		if (sel == 2) return S_SCORES;
+		if (sel == 3) return S_CREDITS;
+		if (sel == 4) return S_OPTIONS;
 		return S_QUIT;
 	}
 	return S_MAIN;
+}
+
+/* ------------------------------------------------------------------ how to play: a few pages, Left/Right turn them */
+static Screen screen_help(int &page)
+{
+	struct Page { const char *head, *text; };
+	static const Page pages[6] = {
+		{ "THE GAME",
+		  "Creatures march along the path to your exit. Every one that gets through costs a life; lose\n"
+		  "them all and the match is lost. Stop them with towers, traps and the Bastion, and win by\n"
+		  "clearing every wave. Endless mode never ends: see how far you get.\n\n"
+		  "Every creature you defeat pays gold, a little more on the harder levels and in later waves.\n"
+		  "Spend it on towers, upgrades, repairs, traps and research.\n\n"
+		  "CONTROLS\n"
+		  "D-Pad: move the cursor (near the edge it scrolls the map)     A: choose, build, open the menu\n"
+		  "B: close a menu     X: show where towers can go     R1 or R2: double speed\n"
+		  "Start: pause     Select: leave the match" },
+		{ "TOWERS",
+		  "Press A on a green spot to build. Press A on a tower to upgrade, repair or sell it.\n\n"
+		  "Arrow: balanced and cheap; hits ground and air.\n"
+		  "Ballista: long range; each shot on the same target hits harder. Hits air too.\n"
+		  "Catapult and Canon: splash damage, good against swarms. They cannot hit flyers.\n"
+		  "Freeze: slows creatures, and slowed creatures take extra damage from every tower.\n"
+		  "Resupply Depot: no weapon. The towers around it fire faster and mend, and creatures that\n"
+		  "die inside its area pay extra gold.\n\n"
+		  "Creatures hit towers too. A damaged tower can be repaired; a destroyed one is gone." },
+		{ "TRAPS",
+		  "Press A on the path itself, away from the green spots, to set a trap. Each kind has a\n"
+		  "limit on how many you can have at once.\n\n"
+		  "Spikes: hurt each creature that crosses them, until their charges are used up.\n"
+		  "Glue: slows the creatures that walk through it, then dries up.\n"
+		  "Boulder: blocks the path until the creatures smash it. Watch out: ogres and trolls will\n"
+		  "lift a boulder and throw it at a tower nearby.\n\n"
+		  "Traps only work on creatures that walk. Flyers pass over them." },
+		{ "THE BASTION",
+		  "The keep at your exit. Put the cursor on it and press A. The game stops while its menu is\n"
+		  "open and carries on the moment you close it.\n\n"
+		  "RESEARCH: pay gold to improve a tower, a trap or the keep itself. One project at a time;\n"
+		  "once started it cannot be stopped, and it finishes after the number of waves shown.\n"
+		  "Nothing is kept from match to match: every match starts fresh.\n\n"
+		  "ACTIONS: Volley, Rally, Mend and Frost Horn, used from the menu when a wave is on. Each\n"
+		  "needs research, and research shortens the wait before the next use.\n\n"
+		  "FORTIFY: more lives for the match." },
+		{ "THE GARRISON",
+		  "Research can also train soldiers, sent out from the Actions menu. Each kind is good against\n"
+		  "certain creatures and weak against the rest.\n\n"
+		  "Vermin Hunters: spiders, wargs and gnolls.     Giant Slayers: orcs, ogres and trolls; they\n"
+		  "ignore armour.     Skyguard: slingers; the only soldiers who can reach flyers.\n"
+		  "Boulder Rollers: push a boulder up the path that hits every ground creature it touches and\n"
+		  "wears down as it goes.\n\n"
+		  "Fighters guard the last stretch of the path before the keep: they are your last line, for the\n"
+		  "creatures that get past the towers. They are brave but frail and do not stay long. They\n"
+		  "help your towers; they do not replace them." },
+		{ "DOCTRINES AND TIPS",
+		  "Every research tier you finish counts towards its path: Towers, Traps, Garrison or Command.\n"
+		  "At 3, 6 and 9 tiers in one path you earn a doctrine bonus for everything in that path.\n"
+		  "You may spread your research as you like; focusing just pays more.\n\n"
+		  "TIPS\n"
+		  "Look at what is coming: the icons at the bottom show the next wave.\n"
+		  "Mix your towers: swarms need splash, big creatures need heavy hitters, flyers need arrows.\n"
+		  "Do not spend every coin at once: damage to towers needs gold for repairs.\n"
+		  "In Endless mode a supply drop of gold arrives every few waves." }
+	};
+	gfx_clear(0, 0, 0);
+	draw_text("HOW TO PLAY", 24, 10, 28, 0xFFE066, ALIGN_LEFT, 0);
+	char b[16];
+	snprintf(b, sizeof b, "%d / 6", page + 1);
+	draw_text(b, SW - 24, 18, 16, 0xB0B0B0, ALIGN_RIGHT, 0);
+	draw_text(pages[page].head, 24, 50, 18, 0x89F9FF, ALIGN_LEFT, 0);
+	fill_rect(24, 74, SW - 48, 1, 0xF8DDC2);
+	draw_text(pages[page].text, 24, 84, 12, 0xE6E6E6, ALIGN_LEFT, 1);
+	draw_hint("Left/Right: page     B: back");
+	if (pressed(JK_LEFT)) page = (page + 5) % 6;
+	if (pressed(JK_RIGHT) || pressed(JK_A)) page = (page + 1) % 6;
+	if (pressed(JK_B) || pressed(JK_START)) { page = 0; return S_MAIN; }
+	return S_HELP;
 }
 
 static int mapScroll = 0;           /* first map shown in the list */
@@ -580,7 +663,7 @@ static void draw_stats(const Result &r)
 		draw_text(cols[i].head, cols[i].x, 56, 14, 0x89F9FF, ALIGN_LEFT, 0);
 		fill_rect(cols[i].x, 76, 180, 1, 0xF8DDC2);
 	}
-	const int y0 = 84, dy = 17;   /* at most ten lines a column: they end above the buttons */
+	const int y0 = 82, dy = 16;   /* at most ten lines a column: they end above the buttons */
 	int y = y0;
 	auto row = [&](int x, const char *label, const std::string &val) {
 		draw_text(label, x, y, 12, 0xE6E6E6, ALIGN_LEFT, 1);
@@ -617,6 +700,8 @@ static void draw_stats(const Result &r)
 	sub(232, "BASTION");
 	row(232, "Research completed", num(st.researchDone));
 	row(232, "Actions used", num(st.specialsUsed));
+	row(232, "Soldiers sent", num(st.soldiersSent));
+	row(232, "Soldier kills", num(st.soldierKills));
 	/* the enemies, and the traps */
 	y = y0;
 	row(440, "Defeated", num(st.enemiesDefeated));
@@ -889,7 +974,7 @@ static void bastion_rows(const Map *m, int col, std::vector<int> &rows)
 {
 	rows.clear();
 	for (size_t i = 0; i < m->research.size(); i++)
-		if ((m->research[i].group == "keep") == (col == 1)) rows.push_back((int)i);
+		if ((m->research[i].group != "tower" && m->research[i].group != "trap") == (col == 1)) rows.push_back((int)i);
 }
 
 static void bastion_open(Play &p)
@@ -920,8 +1005,8 @@ static void bastion_input(Play &p)
 	}
 	else
 	{
-		if (pressed(JK_UP)) p.bSel = (p.bSel + 3) % 4;
-		if (pressed(JK_DOWN)) p.bSel = (p.bSel + 1) % 4;
+		if (pressed(JK_UP)) p.bSel = (p.bSel + 7) % 8;
+		if (pressed(JK_DOWN)) p.bSel = (p.bSel + 1) % 8;
 		if (pressed(JK_A))
 		{
 			if (!m->useSpecial(p.bSel)) sfx_play(SFX_ERROR);
@@ -944,7 +1029,7 @@ static void bastion_draw(const Play &p)
 	std::string why, l1, l2;
 	if (p.bTab == 0)
 	{
-		const char *heads[2] = { "TOWERS AND TRAPS", "THE KEEP" };
+		const char *heads[2] = { "TOWERS AND TRAPS", "KEEP AND GARRISON" };
 		for (int c = 0; c < 2; c++)
 		{
 			int x = 26 + c * 300;
@@ -983,12 +1068,25 @@ static void bastion_draw(const Play &p)
 				const ResearchTier &t = r.tier[r.done];
 				snprintf(b, sizeof b, "%s  -  tier %d of %d:  %s", r.title.c_str(), r.done + 1, (int)r.tier.size(), t.name.c_str());
 				draw_text(b, 26, 220, 13, 0xFFFFFF, ALIGN_LEFT, 1);
-				draw_text(t.text, 26, 240, 12, 0xE6E6E6, ALIGN_LEFT, 1);
-				snprintf(b, sizeof b, "Costs %d gold, takes %d %s once started", t.cost, t.waves, t.waves == 1 ? "wave" : "waves");
-				draw_text(b, 26, 260, 12, m->money >= t.cost ? 0xB0FFB0 : 0xFF9090, ALIGN_LEFT, 1);
+				draw_text(t.text, 26, 236, 12, 0xE6E6E6, ALIGN_LEFT, 1);
+				bool waveOn = m->waves && m->waves->started && m->waves->current < (int)m->waves->waves.size() && m->waves->waves[m->waves->current]->begun();
+				snprintf(b, sizeof b, "Costs %d gold, takes %d %s%s", t.cost, t.waves, t.waves == 1 ? "wave" : "waves", waveOn ? " (the wave under way does not count)" : " once started");
+				draw_text(b, 26, 252, 12, m->money >= t.cost ? 0xB0FFB0 : 0xFF9090, ALIGN_LEFT, 1);
 				why = m->researchProblem(line);
-				if (!why.empty()) draw_text(why, 26, 280, 12, 0xFF9090, ALIGN_LEFT, 1);
-				else draw_text("A: start", 26, 280, 12, 0x89F9FF, ALIGN_LEFT, 1);
+				if (!why.empty()) draw_text(why, 26, 268, 12, 0xFF9090, ALIGN_LEFT, 1);
+				else draw_text("A: start", 26, 268, 12, 0x89F9FF, ALIGN_LEFT, 1);
+			}
+			{   /* the doctrine of the line's path: tiers finished anywhere in it add up */
+				const std::string &g = r.group;
+				int cat = g == "tower" ? 0 : g == "trap" ? 1 : g == "garrison" ? 2 : r.id == "fortify" ? -1 : 3;
+				static const char *nm[4] = { "Towers", "Traps", "Garrison", "Command" };
+				if (cat >= 0)
+				{
+					int n = m->pathTiers(cat), lv = m->doctrineLevel(cat);
+					if (lv >= 3) snprintf(b, sizeof b, "%s doctrine: %d tiers done, level 3 (the highest)", nm[cat], n);
+					else snprintf(b, sizeof b, "%s doctrine: %d tiers done, level %d - the next level at %d", nm[cat], n, lv, (lv + 1) * 3);
+					draw_text(b, 26, 284, 12, 0xFFD400, ALIGN_LEFT, 1);
+				}
 			}
 		}
 		if (m->researchActive >= 0)
@@ -1003,22 +1101,23 @@ static void bastion_draw(const Play &p)
 	}
 	else
 	{
-		static const char *names[4] = { "Volley", "Rally", "Mend", "Frost Horn" };
-		static const char *ids[4] = { "volley", "rally", "mend", "frost" };
-		for (int i = 0; i < 4; i++)
+		static const char *names[8] = { "Volley", "Rally", "Mend", "Frost Horn", "Vermin Hunters", "Giant Slayers", "Skyguard", "Boulder Rollers" };
+		static const char *ids[8] = { "volley", "rally", "mend", "frost", "vermin", "giant", "sky", "roller" };
+		for (int i = 0; i < 8; i++)
 		{
-			int y = 60 + i * 28;
+			int y = 52 + i * 20 + (i >= 4 ? 14 : 0);
 			bool sel = i == p.bSel;
-			if (sel) fill_rect(22, y - 3, SW - 44, 24, 0x89F9FF, 60);
-			draw_text(names[i], 34, y, 14, sel ? 0xFFFFFF : 0xD0D0D0, ALIGN_LEFT, 1);
+			if (sel) fill_rect(22, y - 3, SW - 44, 20, 0x89F9FF, 60);
+			draw_text(names[i], 34, y, 13, sel ? 0xFFFFFF : 0xD0D0D0, ALIGN_LEFT, 1);
 			int lvl = m->specialLevel(ids[i]);
 			std::string st = lvl <= 0 ? "not researched" : m->specialProblem(i).empty() ? "READY" : m->specialProblem(i);
 			if (i == 1 && (int)gnow() < m->rallyUntil) st = "ACTIVE";
-			draw_text(st, 300, y, 13, st == "READY" ? 0xB0FFB0 : st == "ACTIVE" ? 0xFFD400 : 0x909090, ALIGN_LEFT, 1);
-			for (int k = 0; k < 3; k++) fill_circle(540 + k * 18, y + 7, 5, k < lvl ? 0xFFD400 : 0x505860, 255);
+			draw_text(st, 300, y, 12, st == "READY" ? 0xB0FFB0 : st == "ACTIVE" ? 0xFFD400 : 0x909090, ALIGN_LEFT, 1);
+			for (int k = 0; k < 3; k++) fill_circle(540 + k * 18, y + 6, 5, k < lvl ? 0xFFD400 : 0x505860, 255);
 		}
+		draw_text("THE GARRISON", 34, 52 + 4 * 20 + 1, 10, 0x89F9FF, ALIGN_LEFT, 0);
 		int line = m->specialLine(ids[p.bSel]);
-		fill_rect(26, 190, SW - 52, 1, 0xF8DDC2, 200);
+		fill_rect(26, 228, SW - 52, 1, 0xF8DDC2, 200);
 		if (line >= 0)
 		{
 			const ResearchLine &r = m->research[line];
@@ -1027,13 +1126,14 @@ static void bastion_draw(const Play &p)
 			static const char *what[4] = { "Arrows rain down on every creature near the keep, each losing a share of its health.",
 				"Every tower fires faster for a short while.", "Every damaged tower is repaired by a share of its health.",
 				"A cold blast slows every creature on the path for a short while." };
-			draw_text(what[p.bSel], 26, 198, 12, 0xFFFFFF, ALIGN_LEFT, 1);
+			std::string desc = p.bSel < 4 ? what[p.bSel] : (p.bSel - 4 < (int)m->soldierTypes.size() ? m->soldierTypes[p.bSel - 4].text : "");
+			draw_text(desc, 26, 236, 12, 0xFFFFFF, ALIGN_LEFT, 1);
 			snprintf(b, sizeof b, "%s%s", lvl > 0 ? "Now: " : "Research it first. ", t.text.c_str());
-			draw_text(b, 26, 218, 12, 0xE6E6E6, ALIGN_LEFT, 1);
+			draw_text(b, 26, 254, 12, 0xE6E6E6, ALIGN_LEFT, 1);
 			if (lvl > 0 && lvl < (int)r.tier.size())
 			{
 				snprintf(b, sizeof b, "Next tier: %s", r.tier[lvl].text.c_str());
-				draw_text(b, 26, 238, 12, 0x89F9FF, ALIGN_LEFT, 1);
+				draw_text(b, 26, 272, 12, 0x89F9FF, ALIGN_LEFT, 1);
 			}
 		}
 		draw_text("The game is paused here.  Up/Down: choose   A: use it   L1/R1: tab   B: close", SW / 2, SH - 34, 10, 0xB0B0B0, ALIGN_CENTER, 1);
@@ -1373,7 +1473,8 @@ int main()
 		       getenv("DM_SEED") ? getenv("DM_SEED") : "default", autoLimit, getenv("DM_AUTOSPEED") ? getenv("DM_AUTOSPEED") : "4");
 		fflush(stdout);
 	}
-	int mainSel = 0, optSel = 0, afterSel = 0;
+	int mainSel = 0, optSel = 0, afterSel = 0, helpPage = 0;
+	if (getenv("DM_HELP")) { screen = S_HELP; helpPage = atoi(getenv("DM_HELP")); }   /* test hook: open on a page of How To Play */
 	Result result;
 	Play play;
 	uint32_t lastFrame = millis();
@@ -1414,6 +1515,7 @@ int main()
 		{
 		case S_MAIN: next = screen_main(mainSel); break;
 		case S_PLAY: next = screen_play(); break;
+		case S_HELP: next = screen_help(helpPage); break;
 		case S_OPTIONS: next = screen_options(optSel); break;
 		case S_CREDITS: next = screen_credits(); break;
 		case S_AFTER: next = screen_after(result, afterSel); break;
@@ -1437,7 +1539,7 @@ int main()
 			if (getenv("DM_BASTION") && play.map->ok)   /* test hook: opens the Bastion panel (tab 0 research or 1 actions) with a few tiers researched */
 			{
 				Map *bm = play.map;
-				for (size_t k = 0; k < bm->research.size() && k < 12; k++) bm->research[k].done = (int)(k % 4 > 2 ? 2 : k % 4);
+				for (size_t k = 0; k < bm->research.size() && k < 18; k++) bm->research[k].done = (int)(k % 4 > 2 ? 2 : k % 4);
 				bm->researchActive = 0; bm->researchLeft = 2; bm->money = 300;
 				bastion_open(play);
 				play.bTab = atoi(getenv("DM_BASTION")) & 1;
@@ -1461,6 +1563,17 @@ int main()
 			break;
 		case S_GAME:
 			if (getenv("DM_CRASH_TEST") && (int)millis() - play.started > 4000) *(volatile int *)0 = 1;
+			if (getenv("DM_SOLDIERS") && play.map->ok && play.map->waves && play.map->waves->started && play.map->waves->waves[play.map->waves->current]->begun())
+			{   /* test hook: once the first wave is on, sends one soldier of each kind, to see them at work */
+				static bool sent;
+				if (!sent)
+				{
+					sent = true;
+					ResearchTier t;
+					t.eff.push_back(std::make_pair(std::string("count"), 2.0f)); t.eff.push_back(std::make_pair(std::string("time"), 90.0f)); t.eff.push_back(std::make_pair(std::string("zone"), 700.0f));
+					for (int k = 0; k < 4; k++) play.map->spawnSoldiers(k, t);
+				}
+			}
 			if (getenv("DM_FAKE_RESULT") && (int)millis() - play.started > (getenv("DM_FAKE_DELAY") ? atoi(getenv("DM_FAKE_DELAY")) : 1500) && !play.map->finished)
 			{   /* test hook: end the match at once with some score */
 				play.map->killPoints = 640;
@@ -1568,6 +1681,7 @@ int main()
 					long rss, peak;
 					proc_mem_kb(rss, peak);
 					printf("DBG RESULT frames %d  match %s  wave %d/%d  lives %d  min fps %d  rss %ld kB (peak %ld)\n", autoFrames, am->finishedWon ? "WON" : "LOST", am->wavesCleared, (int)am->waves->waves.size(), am->lifes, autoMinFps == 999 ? -1 : autoMinFps, rss, peak);
+					printf("DBG SOLDIERS sent %d  kills %d  damage %.0f  defeated %d  research %d  actions %d\n", am->stats.soldiersSent, am->stats.soldierKills, am->stats.soldierDamage, am->stats.enemiesDefeated, am->stats.researchDone, am->stats.specialsUsed);
 					fflush(stdout);
 					screen = next = S_QUIT;
 					break;
