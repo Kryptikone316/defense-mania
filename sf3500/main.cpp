@@ -515,14 +515,20 @@ static Screen screen_options(int &sel)
 		if (i == sel)
 			rect_outline(34, y - 6, SW - 68, 40, 0x89F9FF, 120);
 	}
-	draw_button("BACK", 40, SH - 54, 110, 26, false, 20);
+	draw_button("BACK", 40, SH - 54, 110, 26, sel == 5, 20);
+	if (sel == 5) rect_outline(34, SH - 60, 122, 38, 0x89F9FF, 120);
 	draw_hint("Up/Down: choose    Left/Right or A: change    B: back");
 	if (pressed(JK_UP) && sel > 0) sel--;
-	if (pressed(JK_DOWN) && sel < 4) sel++;
+	if (pressed(JK_DOWN) && sel < 5) sel++;
 	int step = (pressed(JK_RIGHT) ? 10 : 0) - (pressed(JK_LEFT) ? 10 : 0);
 	if (sel == 0 && step) audio_set_master(audio_master() + step);
 	if (sel == 1 && step) music_set_volume(music_volume() + step);
 	if (sel == 2 && step) { sfx_set_volume(sfx_volume() + step); sfx_play(SFX_BUILD); }
+	if (pressed(JK_A) && sel == 5)
+	{
+		save_settings();
+		return S_MAIN;
+	}
 	if (pressed(JK_A))
 	{
 		if (sel == 3) optHQ = !optHQ;
@@ -1693,7 +1699,7 @@ int main()
 			}
 			if (play.map->finished)
 			{
-				afterSel = 0;
+				afterSel = play.map->finishedWon && !play.map->endless ? 1 : 0;   /* after a victory the button is BACK TO MENU, after a defeat PLAY AGAIN */
 				if (play.map->quitDialog && !play.map->finishedWon && !play.map->endless)
 					next = S_MAIN;   /* quit from the pause dialog goes straight back */
 				else
