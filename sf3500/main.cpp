@@ -1219,6 +1219,7 @@ static void play_draw(Play &p)
 		bool onKeep = m->nearBastion((float)wx, (float)wy);
 		uint32_t col = onKeep ? 0x89F9FF : onTower ? 0xFFE066 : buildable ? 0x66FF66 : trapSpot ? 0xFFAA33 : 0xFF5050;
 		rect_outline(tx * m->tileSize - camX, ty * m->tileSize - camY, m->tileSize, m->tileSize, col, 190);
+		if (onKeep) draw_text("A: BASTION", p.cx, p.cy + 14, 12, 0x89F9FF, ALIGN_CENTER, 2, 255, 0x000000);
 		/* the pointer */
 		int x = (int)p.cx, y = (int)p.cy;
 		draw_line(x - 8, y, x + 8, y, 0x000000);
