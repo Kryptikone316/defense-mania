@@ -73,6 +73,23 @@ Sheet *CharSets::get(const std::string &file)
 }
 
 /* ------------------------------------------------------------------ enemy */
+/* What creatures do to towers: a fraction of the listed damage by difficulty (so Easy is gentle), and no tower loses more than a share of its health
+ * per second to creatures, however many pass by. Both are in defensemania.cfg. */
+float tower_damage_factor(int difficulty)
+{
+	static const char *key[3] = { "tower_damage_easy", "tower_damage_normal", "tower_damage_hard" };
+	static const double def[3] = { 0.5, 0.75, 1.0 };
+	int i = difficulty < 1 ? 0 : difficulty > 3 ? 2 : difficulty - 1;
+	return (float)cfg_num(key[i], def[i]);
+}
+static float tower_damage_cap(int difficulty)
+{
+	static const char *key[3] = { "tower_damage_cap_easy", "tower_damage_cap_normal", "tower_damage_cap_hard" };
+	static const double def[3] = { 6, 10, 15 };
+	int i = difficulty < 1 ? 0 : difficulty > 3 ? 2 : difficulty - 1;
+	return (float)cfg_num(key[i], def[i]);
+}
+
 Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 {
 	position[0] = position[1] = -16;
@@ -86,7 +103,7 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	armor = def.flt("armor");
 	thrower = def.num("thrower") != 0;
 	throwRange = def.flt("throwrange", 150);
-	throwDamage = def.flt("throwdamage", 100) * map->difficulty * sc.damage;
+	throwDamage = def.flt("throwdamage", 100) * tower_damage_factor(map->difficulty) * sc.damage;
 	liftTime = def.num("lifttime", 2500);
 	if (def.num("attackrate") > 0) fireRate = def.num("attackrate");
 	if (def.num("attackradius") > 0) fireRadius = def.num("attackradius");
@@ -97,7 +114,7 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	moveSpeed = (int)(def.num("movespeed") * sc.speed + 0.5f);
 	money = (int)(def.num("money") * sc.money + 0.5f);
 	goldValue = (float)def.num("money") * sc.money * sc.gold;
-	damage = (int)(def.num("damage") * map->difficulty * sc.damage + 0.5f);
+	damage = def.flt("damage") * tower_damage_factor(map->difficulty) * sc.damage;
 	animationSpeed = (float)def.num("animationspeed");
 	moveCount = gnow();
 }
@@ -549,7 +566,7 @@ void Map::updateTraps()
 		{
 			for (size_t k = 0; k < towers.size(); k++)   /* the tower that stands where it lands */
 				if (!towers[k]->destroyed && dist((towers[k]->position[0] + 0.5f) * tileSize, (towers[k]->position[1] + 0.5f) * tileSize, p.x1, p.y1) < 4)
-					towers[k]->enemyDamage((int)p.damage);
+					towers[k]->enemyDamage(p.damage);
 			sfx_play(SFX_CRUMBLE);
 			projectiles.erase(projectiles.begin() + i);
 		}
@@ -927,9 +944,22 @@ void Tower::upgrade()
 	}
 }
 
-void Tower::enemyDamage(int dmg)
+void Tower::enemyDamage(float dmg, bool fromCreature)
 {
-	health -= dmg;
+	if (destroyed) return;
+	if (fromCreature)
+	{
+		int now = (int)gnow();
+		if (now - capStart >= 1000) { capStart = now; capTaken = 0; }
+		float room = maxHealth * tower_damage_cap(map->difficulty) / 100.0f - capTaken;
+		if (room <= 0) return;
+		if (dmg > room) dmg = room;
+		capTaken += dmg;
+	}
+	hitCarry += dmg;
+	int whole = (int)hitCarry;
+	hitCarry -= (float)whole;
+	health -= whole;
 	if (health < 0 && !destroyed)
 	{
 		destroyed = true;
@@ -1402,11 +1432,11 @@ void Map::removeTower(Tower *t)
 		}
 }
 
-void Map::checkTowers(int x, int y, int radius, int damage)
+void Map::checkTowers(int x, int y, int radius, float damage)
 {
 	for (size_t i = 0; i < towers.size(); i++)
 		if (dist((towers[i]->position[0] + 0.5f) * tileSize, (towers[i]->position[1] + 0.5f) * tileSize, (float)x, (float)y) <= radius)
-			towers[i]->enemyDamage(damage);
+			towers[i]->enemyDamage(damage, true);
 }
 
 struct DrawItem { float y; Tower *tower; Enemy *enemy; };

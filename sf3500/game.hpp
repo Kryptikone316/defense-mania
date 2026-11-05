@@ -97,7 +97,8 @@ private:
 	int healthBarOffset = -1, animationCount = 0, moveCount = 0, moveState = 1, moveStateDirection = 1;
 	float moveVector[2], target[2];   /* a unit vector towards the next way point */
 	float animationSpeed;
-	int moveSpeed, money, damage, maxHealth, health;
+	int moveSpeed, money, maxHealth, health;
+	float damage = 0;      /* what it does to every tower in reach each attack (a fraction is fine: see Tower::enemyDamage) */
 	float goldValue = 0;   /* what a kill pays out: money x the gold factor of the difficulty and the wave */
 	int start[2], end[2];
 	std::vector<std::pair<int, int> > way;
@@ -177,7 +178,7 @@ public:
 	void displayGui();
 	void displayArrow();
 	void hitAnimation();
-	void enemyDamage(int damage);
+	void enemyDamage(float damage, bool fromCreature = false);   /* creature attacks are held to a share of the tower's health per second, by difficulty */
 	std::string description() const;
 	int repairCosts() const;
 	void repair();
@@ -197,7 +198,8 @@ public:
 	float chill[3] = { 0, 0, 0 };
 	float chillNow() const { return chill[currentUpdate < 3 ? currentUpdate : 2]; }
 	const SupportLevel &supportNow() const { return sup[currentUpdate < 3 ? currentUpdate : 2]; }
-	float buffRate = 1.0f, healCarry = 0;   /* set every frame by the map from the depots around */
+	float buffRate = 1.0f, healCarry = 0, hitCarry = 0, capTaken = 0;
+	int capStart = 0;   /* set every frame by the map from the depots around */
 private:
 	void checkEnemy();
 	void shoot(float x, float y);
@@ -248,7 +250,7 @@ public:
 	void addTower(int type, int tx, int ty);
 	void sellTower(Tower *t);
 	void removeTower(Tower *t);
-	void checkTowers(int x, int y, int radius, int damage);
+	void checkTowers(int x, int y, int radius, float damage);
 	std::vector<TrapType> trapTypes;
 	std::vector<Trap> traps;
 	std::vector<Projectile> projectiles;
