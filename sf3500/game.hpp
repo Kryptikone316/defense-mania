@@ -36,6 +36,7 @@ struct Stats {
 	int built[8] = { 0 }, upgrades = 0, repairs = 0, sold = 0, towersLost = 0;
 	int trapsBuilt[4] = { 0 }, boulderThrows = 0;   /* by trap type; boulders thrown back at towers */
 	float depotGold = 0;                            /* the extra gold the Resupply Depots paid */
+	int researchDone = 0, specialsUsed = 0;         /* the Bastion */
 	int enemiesDefeated = 0, enemiesLeaked = 0, shots = 0;
 	int playMs = 0;
 };
@@ -65,8 +66,8 @@ public:
 	void display();
 	void displayGui();
 	void setWaypoints(const int *start, const int *end, const std::vector<std::pair<int, int> > &wps);
-	void hitByTower(float damage, float freeze, float chill = 0);
-	void hitByTower(float damage, float freeze, Tower *tower, float multiplier, float chill = 0);
+	void hitByTower(float damage, float freeze, float chill = 0, float slowMs = 2500);
+	void hitByTower(float damage, float freeze, Tower *tower, float multiplier, float chill = 0, float slowMs = 2500);
 	void hitAnimation(const std::string &charset, int x);
 	bool alive() const { return enemyAlive; }
 	bool flying = false; /* ground-only towers cannot target it, ground traps do not touch it */
@@ -78,6 +79,8 @@ public:
 	bool thrower = false;    /* lifts a blocking boulder and hurls it at a tower nearby */
 	float throwRange = 150, throwDamage = 100;
 	int liftTime = 2500, liftStart = 0, liftTrapId = 0;
+	int frostUntil = 0;      /* slowed by the Bastion's Frost Horn (flyers too) */
+	float frostFactor = 1;
 	int glueUntil = 0;       /* stuck in glue until this game time */
 	float glueFactor = 1;    /* ... and moving at this fraction of the speed */
 	float moveComplete = 0, position[2];
@@ -87,7 +90,7 @@ public:
 private:
 	void checkWP();
 	void calculateMoveVector();
-	void getDamage(float damage, float freeze, float chill);
+	void getDamage(float damage, float freeze, float chill, float slowMs);
 	float dmgCarry = 0, chillPct = 0;    /* the fractions of damage not dealt yet; how much more damage a slowed creature takes */
 	int chillUntil = 0;
 	Map *map;
@@ -173,7 +176,8 @@ struct TowerType {
 
 class Tower {
 public:
-	Tower(const TowerType &t, int x, int y, Map *map);
+	Tower(const TowerType &t, int x, int y, Map *map, int typeIdx = 0);
+	int typeIdx = 0;
 	void display();
 	void displayGui();
 	void displayArrow();
@@ -197,6 +201,8 @@ public:
 	bool groundOnly = false;
 	float chill[3] = { 0, 0, 0 };
 	float chillNow() const { return chill[currentUpdate < 3 ? currentUpdate : 2]; }
+	float slowFactor() const;   /* the freeze factor with the research of the moment (0 for towers that do not slow) */
+	float slowMs() const;
 	const SupportLevel &supportNow() const { return sup[currentUpdate < 3 ? currentUpdate : 2]; }
 	float buffRate = 1.0f, healCarry = 0, hitCarry = 0, capTaken = 0;
 	int capStart = 0;   /* set every frame by the map from the depots around */
@@ -232,12 +238,35 @@ struct TrapType {
 	Image icon, picture, crack[2];   /* a boulder shows cracks as it is smashed */
 };
 struct Trap {
+	float maxHealth = 0, maxCharges = 0, damage = 0, slow = 1;   /* with the research of the moment */
+	int duration = 0;
 	int id = 0;
 	int type = 0, born = 0;
 	float x = 0, y = 0;
 	float charges = 0, health = 0;   /* spikes: hits left; boulder: health left */
 	int attackers = 0;               /* creatures smashing it this frame */
 	std::vector<std::pair<Enemy *, int> > hits;   /* spikes: when each creature was last hurt */
+};
+
+/* the Bastion's research: lines of three tiers; what has been finished changes towers and traps through these multipliers */
+struct ResearchTier {
+	std::string name, text;
+	int cost = 0, waves = 0;
+	std::vector<std::pair<std::string, float> > eff;
+	float get(const char *key, float def = 0) const { for (size_t i = 0; i < eff.size(); i++) if (eff[i].first == key) return eff[i].second; return def; }
+};
+struct ResearchLine {
+	std::string id, group, target, title;   /* group: tower, trap or keep */
+	std::vector<ResearchTier> tier;
+	int done = 0;                           /* tiers finished */
+};
+struct TowerMods {
+	float damage = 1, rate = 1, reach = 1, splash = 1, slowtime = 1, suprange = 1;
+	float chill = 0, slow = 0, ramp = 0, supheal = 0, supgold = 0;
+};
+struct TrapMods {
+	float damage = 1, charges = 1, duration = 1, health = 1, slow = 0;
+	int cap = 0;
 };
 
 class Map {
@@ -269,6 +298,33 @@ public:
 	void applySupport();   /* every frame: the depots' faster fire and healing for the towers in their areas */
 	float supportGold(float x, float y, float killGold) const;   /* the extra gold a kill at this spot pays */
 	int supportTick = -1;
+	Image bastionImg;
+	std::string notice;      /* a short message in the middle of the top edge (supply drops, finished research) */
+	int noticeUntil = 0;
+	std::vector<std::string> noticeQueue;
+	void pushNotice(const std::string &s);
+	void updateNotices();
+	/* the Bastion: a keep at the exit; research and the specials */
+	float bastionX = 0, bastionY = 0;
+	bool nearBastion(float wx, float wy) const;
+	std::vector<ResearchLine> research;
+	std::vector<TowerMods> towerMods;   /* by tower type */
+	std::vector<TrapMods> trapMods;     /* by trap type */
+	int researchActive = -1, researchLeft = 0;
+	int baseLifes = 10, extraLives = 0;
+	std::string researchProblem(int line) const;
+	bool startResearch(int line);
+	void researchWaveDone();
+	void applyResearch();
+	int specialLine(const char *id) const;
+	int specialLevel(const char *id) const;
+	int specialReadyAt[4] = { 0, 0, 0, 0 };
+	int rallyUntil = 0;
+	float rallyPower = 0;
+	int volleyUntil = 0;
+	std::string specialProblem(int idx) const;
+	bool useSpecial(int idx);
+	int trapCap(int type) const;
 
 	std::string path, id;
 	int difficulty, tileSize, mapW, mapH, cols, rows, money, lifes;

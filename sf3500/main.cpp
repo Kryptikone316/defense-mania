@@ -228,7 +228,7 @@ static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
 	r.mult = m->scoreMult();
 	r.waveBonus = r.wavesCleared * 100;
 	r.winBonus = won && !m->endless ? 1000 : 0;
-	r.lifeBonus = won && !m->endless ? r.lives * 100 : 0;
+	r.lifeBonus = won && !m->endless ? (r.lives < m->baseLifes ? r.lives : m->baseLifes) * 100 : 0;   /* the Bastion's extra lives do not add to the score */
 	r.perfectBase = m->endless ? 0 : info.perfectBase;
 	r.perfect = (int)(r.perfectBase * r.mult);
 	r.score = (int)((r.kills + r.waveBonus + r.winBonus + r.lifeBonus) * r.mult);
@@ -614,6 +614,9 @@ static void draw_stats(const Result &r)
 	fill_rect(232, y, 180, 1, 0x707070);
 	y += 4;
 	row(232, "In all", num(total));
+	sub(232, "BASTION");
+	row(232, "Research completed", num(st.researchDone));
+	row(232, "Actions used", num(st.specialsUsed));
 	/* the enemies, and the traps */
 	y = y0;
 	row(440, "Defeated", num(st.enemiesDefeated));
@@ -726,7 +729,8 @@ static Screen screen_after(Result &r, int &sel)
 struct Play {
 	Map *map = NULL;
 	float cx = 0, cy = 0, holdMs = 0;
-	int menuKind = 0;       /* 0 none, 1 build, 2 tower, 3 trap */
+	int menuKind = 0;       /* 0 none, 1 build, 2 tower, 3 trap, 4 the Bastion */
+	int bTab = 0, bCol = 0, bSel = 0;   /* the Bastion panel: tab (research, actions), column and row */
 	float trapX = 0, trapY = 0;   /* where the trap menu is open (on the path) */
 	int menuSel = 0, menuTX = 0, menuTY = 0;
 	Tower *menuTower = NULL;
@@ -810,7 +814,7 @@ static void draw_radial(const Play &p)
 		{
 			img = &m->trapTypes[i].icon;
 			cost = m->trapTypes[i].costs;
-			dim = m->money < cost || m->trapCount(i) >= m->trapTypes[i].cap;
+			dim = m->money < cost || m->trapCount(i) >= m->trapCap(i);
 		}
 		else
 		{
@@ -840,7 +844,7 @@ static void draw_radial(const Play &p)
 	{
 		const TrapType &t = m->trapTypes[p.menuSel];
 		char b[300];
-		snprintf(b, sizeof b, "%s - %d $   (%d of %d placed)\n%s", t.name.c_str(), t.costs, m->trapCount(p.menuSel), t.cap, t.text.c_str());
+		snprintf(b, sizeof b, "%s - %d $   (%d of %d placed)\n%s", t.name.c_str(), t.costs, m->trapCount(p.menuSel), m->trapCap(p.menuSel), t.text.c_str());
 		info_box(b);
 	}
 	else if (p.menuKind == 1)
@@ -859,6 +863,7 @@ static void draw_radial(const Play &p)
 
 static void close_menu(Play &p)
 {
+	if (p.menuKind == 4 && p.map && !p.map->pause) globalSpeed = p.speed2 ? 2.0f : 1.0f;   /* the Bastion panel stops the game while it is open */
 	if (p.menuTower)
 	{
 		p.menuTower->showRadius = false;
@@ -877,6 +882,162 @@ static void open_tower_menu(Play &p, int id)
 	p.menuTower->selected = true;
 	p.menuTX = p.menuTower->position[0];
 	p.menuTY = p.menuTower->position[1];
+}
+
+/* ------------------------------------------------------------------ the Bastion panel */
+static void bastion_rows(const Map *m, int col, std::vector<int> &rows)
+{
+	rows.clear();
+	for (size_t i = 0; i < m->research.size(); i++)
+		if ((m->research[i].group == "keep") == (col == 1)) rows.push_back((int)i);
+}
+
+static void bastion_open(Play &p)
+{
+	p.menuKind = 4;
+	p.bTab = 0; p.bCol = 0; p.bSel = 0;
+	globalSpeed = 0;
+}
+
+static void bastion_input(Play &p)
+{
+	Map *m = p.map;
+	if (pressed(JK_B)) { close_menu(p); return; }
+	if (pressed(JK_L1) || pressed(JK_R1) || pressed(JK_X)) { p.bTab ^= 1; p.bSel = 0; p.bCol = 0; }
+	if (p.bTab == 0)
+	{
+		std::vector<int> rows;
+		if (pressed(JK_LEFT) || pressed(JK_RIGHT)) { p.bCol ^= 1; p.bSel = 0; }
+		bastion_rows(m, p.bCol, rows);
+		if (rows.empty()) return;
+		if (pressed(JK_UP)) p.bSel = (p.bSel + (int)rows.size() - 1) % (int)rows.size();
+		if (pressed(JK_DOWN)) p.bSel = (p.bSel + 1) % (int)rows.size();
+		if (p.bSel >= (int)rows.size()) p.bSel = 0;
+		if (pressed(JK_A))
+		{
+			if (!m->startResearch(rows[p.bSel])) { sfx_play(SFX_ERROR); }
+		}
+	}
+	else
+	{
+		if (pressed(JK_UP)) p.bSel = (p.bSel + 3) % 4;
+		if (pressed(JK_DOWN)) p.bSel = (p.bSel + 1) % 4;
+		if (pressed(JK_A))
+		{
+			if (!m->useSpecial(p.bSel)) sfx_play(SFX_ERROR);
+			else close_menu(p);
+		}
+	}
+}
+
+static void bastion_draw(const Play &p)
+{
+	Map *m = p.map;
+	fill_rect(10, 6, SW - 20, SH - 12, 0x0C1420, 255);
+	rect_outline(10, 6, SW - 20, SH - 12, 0x89F9FF, 150);
+	draw_text("BASTION", 26, 10, 22, 0xFFE066, ALIGN_LEFT, 0);
+	{ char g[40]; snprintf(g, sizeof g, "Gold %d", m->money); draw_text(g, SW - 26, 14, 16, 0xFFD400, ALIGN_RIGHT, 1); }
+	draw_text("RESEARCH", 250, 17, 14, p.bTab == 0 ? 0xFFFFFF : 0x808080, ALIGN_LEFT, 0);
+	draw_text("ACTIONS", 350, 17, 14, p.bTab == 1 ? 0xFFFFFF : 0x808080, ALIGN_LEFT, 0);
+	fill_rect(p.bTab == 0 ? 248 : 348, 35, p.bTab == 0 ? 80 : 66, 2, 0x89F9FF, 255);
+	char b[200];
+	std::string why, l1, l2;
+	if (p.bTab == 0)
+	{
+		const char *heads[2] = { "TOWERS AND TRAPS", "THE KEEP" };
+		for (int c = 0; c < 2; c++)
+		{
+			int x = 26 + c * 300;
+			draw_text(heads[c], x, 44, 11, 0x89F9FF, ALIGN_LEFT, 0);
+			std::vector<int> rows;
+			bastion_rows(m, c, rows);
+			for (size_t i = 0; i < rows.size(); i++)
+			{
+				const ResearchLine &r = m->research[rows[i]];
+				int y = 60 + (int)i * 16;
+				bool sel = c == p.bCol && (int)i == p.bSel;
+				if (sel) fill_rect(x - 4, y - 2, 280, 16, 0x89F9FF, 60);
+				bool active = m->researchActive == rows[i];
+				draw_text(r.title, x, y, 12, sel ? 0xFFFFFF : 0xD0D0D0, ALIGN_LEFT, 1);
+				for (int k = 0; k < 3; k++)
+				{
+					uint32_t col = k < r.done ? 0xFFD400 : (active && k == r.done ? 0x89F9FF : 0x505860);
+					fill_circle(x + 190 + k * 18, y + 7, 5, col, 255);
+				}
+			}
+		}
+		std::vector<int> rows;
+		bastion_rows(m, p.bCol, rows);
+		if (!rows.empty())
+		{
+			int line = rows[p.bSel < (int)rows.size() ? p.bSel : 0];
+			const ResearchLine &r = m->research[line];
+			fill_rect(26, 212, SW - 52, 1, 0xF8DDC2, 200);
+			if (r.done >= (int)r.tier.size())
+			{
+				snprintf(b, sizeof b, "%s: fully researched", r.title.c_str());
+				draw_text(b, 26, 220, 13, 0xFFD400, ALIGN_LEFT, 1);
+			}
+			else
+			{
+				const ResearchTier &t = r.tier[r.done];
+				snprintf(b, sizeof b, "%s  -  tier %d of %d:  %s", r.title.c_str(), r.done + 1, (int)r.tier.size(), t.name.c_str());
+				draw_text(b, 26, 220, 13, 0xFFFFFF, ALIGN_LEFT, 1);
+				draw_text(t.text, 26, 240, 12, 0xE6E6E6, ALIGN_LEFT, 1);
+				snprintf(b, sizeof b, "Costs %d gold, takes %d %s once started", t.cost, t.waves, t.waves == 1 ? "wave" : "waves");
+				draw_text(b, 26, 260, 12, m->money >= t.cost ? 0xB0FFB0 : 0xFF9090, ALIGN_LEFT, 1);
+				why = m->researchProblem(line);
+				if (!why.empty()) draw_text(why, 26, 280, 12, 0xFF9090, ALIGN_LEFT, 1);
+				else draw_text("A: start", 26, 280, 12, 0x89F9FF, ALIGN_LEFT, 1);
+			}
+		}
+		if (m->researchActive >= 0)
+		{
+			const ResearchLine &r = m->research[m->researchActive];
+			snprintf(b, sizeof b, "Under way: %s - %s   (%d %s to go)", r.title.c_str(), r.tier[r.done].name.c_str(), m->researchLeft, m->researchLeft == 1 ? "wave" : "waves");
+			draw_text(b, 26, 304, 12, 0x89F9FF, ALIGN_LEFT, 1);
+		}
+		else
+			draw_text("No research under way: one project at a time", 26, 304, 12, 0x909090, ALIGN_LEFT, 1);
+		draw_text("The game is paused here.  D-Pad: choose   L1/R1: tab   A: start (it cannot be stopped)   B: close", SW / 2, SH - 34, 10, 0xB0B0B0, ALIGN_CENTER, 1);
+	}
+	else
+	{
+		static const char *names[4] = { "Volley", "Rally", "Mend", "Frost Horn" };
+		static const char *ids[4] = { "volley", "rally", "mend", "frost" };
+		for (int i = 0; i < 4; i++)
+		{
+			int y = 60 + i * 28;
+			bool sel = i == p.bSel;
+			if (sel) fill_rect(22, y - 3, SW - 44, 24, 0x89F9FF, 60);
+			draw_text(names[i], 34, y, 14, sel ? 0xFFFFFF : 0xD0D0D0, ALIGN_LEFT, 1);
+			int lvl = m->specialLevel(ids[i]);
+			std::string st = lvl <= 0 ? "not researched" : m->specialProblem(i).empty() ? "READY" : m->specialProblem(i);
+			if (i == 1 && (int)gnow() < m->rallyUntil) st = "ACTIVE";
+			draw_text(st, 300, y, 13, st == "READY" ? 0xB0FFB0 : st == "ACTIVE" ? 0xFFD400 : 0x909090, ALIGN_LEFT, 1);
+			for (int k = 0; k < 3; k++) fill_circle(540 + k * 18, y + 7, 5, k < lvl ? 0xFFD400 : 0x505860, 255);
+		}
+		int line = m->specialLine(ids[p.bSel]);
+		fill_rect(26, 190, SW - 52, 1, 0xF8DDC2, 200);
+		if (line >= 0)
+		{
+			const ResearchLine &r = m->research[line];
+			int lvl = r.done;
+			const ResearchTier &t = r.tier[lvl > 0 ? lvl - 1 : 0];
+			static const char *what[4] = { "Arrows rain down on every creature near the keep, each losing a share of its health.",
+				"Every tower fires faster for a short while.", "Every damaged tower is repaired by a share of its health.",
+				"A cold blast slows every creature on the path for a short while." };
+			draw_text(what[p.bSel], 26, 198, 12, 0xFFFFFF, ALIGN_LEFT, 1);
+			snprintf(b, sizeof b, "%s%s", lvl > 0 ? "Now: " : "Research it first. ", t.text.c_str());
+			draw_text(b, 26, 218, 12, 0xE6E6E6, ALIGN_LEFT, 1);
+			if (lvl > 0 && lvl < (int)r.tier.size())
+			{
+				snprintf(b, sizeof b, "Next tier: %s", r.tier[lvl].text.c_str());
+				draw_text(b, 26, 238, 12, 0x89F9FF, ALIGN_LEFT, 1);
+			}
+		}
+		draw_text("The game is paused here.  Up/Down: choose   A: use it   L1/R1: tab   B: close", SW / 2, SH - 34, 10, 0xB0B0B0, ALIGN_CENTER, 1);
+	}
 }
 
 /* A tower that enemies destroy is removed and freed by the map while its menu may still be open: the menu lets go of
@@ -934,6 +1095,7 @@ static void play_input(Play &p, float dtMs)
 		}
 		return;
 	}
+	if (p.menuKind == 4) { bastion_input(p); return; }   /* before Start, Select and R1: the panel uses L1/R1 for its tabs and keeps the game stopped */
 	if (pressed(JK_Y))
 		slotcheck_mark();   /* only does anything with slot_check = 1: saves the driver's frame ring right now */
 	if (pressed(JK_START))
@@ -1012,7 +1174,9 @@ static void play_input(Play &p, float dtMs)
 	{
 		int wx = (int)p.cx + camX, wy = (int)p.cy + camY;
 		int j = m->towerAt(wx, wy);
-		if (j != -1)
+		if (m->nearBastion((float)wx, (float)wy))
+			bastion_open(p);
+		else if (j != -1)
 			open_tower_menu(p, j);
 		else if (m->canBuild(wx, wy))
 		{
@@ -1052,7 +1216,8 @@ static void play_draw(Play &p)
 		bool onTower = m->towerAt(wx, wy) != -1;
 		float qx, qy;
 		bool trapSpot = !onTower && !buildable && !m->trapTypes.empty() && m->nearPath((float)wx, (float)wy, 30, qx, qy);
-		uint32_t col = onTower ? 0xFFE066 : buildable ? 0x66FF66 : trapSpot ? 0xFFAA33 : 0xFF5050;
+		bool onKeep = m->nearBastion((float)wx, (float)wy);
+		uint32_t col = onKeep ? 0x89F9FF : onTower ? 0xFFE066 : buildable ? 0x66FF66 : trapSpot ? 0xFFAA33 : 0xFF5050;
 		rect_outline(tx * m->tileSize - camX, ty * m->tileSize - camY, m->tileSize, m->tileSize, col, 190);
 		/* the pointer */
 		int x = (int)p.cx, y = (int)p.cy;
@@ -1070,13 +1235,17 @@ static void play_draw(Play &p)
 		circle_outline(gx, gy, tt.radius, bad ? 0xFF6060 : 0xFFD070, 220);
 		draw_image_center(tt.picture, gx, gy, 0, 0, -1, -1, 170, 0xFFFFFF);
 	}
-	if (p.menuKind)
+	if (p.menuKind && p.menuKind != 4)
 		draw_radial(p);
 	m->drawHud();
+	if (p.menuKind == 4)
+		bastion_draw(p);   /* over the HUD: it has its own gold line */
 	if (m->pause && !m->quitDialog)
 		draw_text("PAUSED", SW / 2, SH / 2 - 14, 28, 0xFFFFFF, ALIGN_CENTER, 2);
 	if (p.speed2 && !m->pause)
 		draw_text("x2", SW - 70, 19, 14, 0xFFE066, ALIGN_RIGHT, 2, 255, 0x000000);
+	if ((int)millis() < m->noticeUntil)
+		draw_text(m->notice, SW / 2, 68, 18, 0xFFD400, ALIGN_CENTER, 2, 255, 0x000000);
 	if (millis() < p.toastUntil)
 		draw_text(p.toast, SW / 2, 44, 16, 0xFFE066, ALIGN_CENTER, 2, 255, 0x000000);
 	if (m->quitDialog)
@@ -1264,6 +1433,15 @@ int main()
 				sscanf(getenv("DM_CURSOR"), "%f,%f", &play.cx, &play.cy);
 			play.started = (int)millis();
 			if (getenv("DM_BUILDAREAS")) play.map->showBuildAreas = true;   /* test hook */
+			if (getenv("DM_BASTION") && play.map->ok)   /* test hook: opens the Bastion panel (tab 0 research or 1 actions) with a few tiers researched */
+			{
+				Map *bm = play.map;
+				for (size_t k = 0; k < bm->research.size() && k < 12; k++) bm->research[k].done = (int)(k % 4 > 2 ? 2 : k % 4);
+				bm->researchActive = 0; bm->researchLeft = 2; bm->money = 300;
+				bastion_open(play);
+				play.bTab = atoi(getenv("DM_BASTION")) & 1;
+				if (getenv("DM_BASTION_SEL")) play.bSel = atoi(getenv("DM_BASTION_SEL"));
+			}
 			camX = camY = 0;
 			if (!play.map->ok)
 			{

@@ -1,0 +1,73 @@
+<?xml version='1.0'?>
+  <research>
+    <line id="arrow" group="tower" target="Arrow Tower" title="Arrow Tower">
+      <tier name="Sharpened Heads" cost="100" waves="1" damage="12">+12% damage</tier>
+      <tier name="Fletching" cost="200" waves="2" rate="12">+12% fire rate</tier>
+      <tier name="Longbows" cost="350" waves="3" reach="15">+15% reach</tier>
+    </line>
+    <line id="catapult" group="tower" target="Catapult Tower" title="Catapult Tower">
+      <tier name="Heavier Stones" cost="100" waves="1" splash="15">+15% splash radius</tier>
+      <tier name="Counterweights" cost="200" waves="2" damage="12">+12% damage</tier>
+      <tier name="Long Arm" cost="350" waves="3" reach="15">+15% reach</tier>
+    </line>
+    <line id="freeze" group="tower" target="Freeze Tower" title="Freeze Tower">
+      <tier name="Brittle Frost" cost="100" waves="1" chill="5">Slowed creatures take 5 points more damage</tier>
+      <tier name="Deep Chill" cost="200" waves="2" slow="0.1">Slow is 10% stronger</tier>
+      <tier name="Lingering Cold" cost="350" waves="3" slowtime="40">Slow lasts 40% longer</tier>
+    </line>
+    <line id="canon" group="tower" target="Canon Tower" title="Canon Tower">
+      <tier name="Better Powder" cost="100" waves="1" damage="12">+12% damage</tier>
+      <tier name="Quick Match" cost="200" waves="2" rate="12">+12% fire rate</tier>
+      <tier name="Grapeshot" cost="350" waves="3" splash="20">+20% splash radius</tier>
+    </line>
+    <line id="ballista" group="tower" target="Ballista Tower" title="Ballista Tower">
+      <tier name="Torsion Springs" cost="100" waves="1" ramp="0.15">Damage ramps up faster</tier>
+      <tier name="Iron Bolts" cost="200" waves="2" damage="15">+15% damage</tier>
+      <tier name="Siege Sights" cost="350" waves="3" reach="15">+15% reach</tier>
+    </line>
+    <line id="depot" group="tower" target="Resupply Depot" title="Resupply Depot">
+      <tier name="Wider Camp" cost="100" waves="1" suprange="20">+20% area</tier>
+      <tier name="Field Surgeons" cost="200" waves="2" supheal="0.5">Heals 0.5% more per second</tier>
+      <tier name="Quartermaster" cost="350" waves="3" supgold="1">+1 gold per kill in its area</tier>
+    </line>
+    <line id="spikes" group="trap" target="spikes" title="Spikes">
+      <tier name="Barbed Iron" cost="100" waves="1" trapdamage="25">+25% damage</tier>
+      <tier name="Spare Stakes" cost="200" waves="2" trapcap="1">One more allowed on the map</tier>
+      <tier name="Hardened Steel" cost="350" waves="3" trapcharges="40">+40% charges</tier>
+    </line>
+    <line id="glue" group="trap" target="glue" title="Glue">
+      <tier name="Sticky Pitch" cost="100" waves="1" trapslow="0.1">Slows 10% harder</tier>
+      <tier name="Spare Barrels" cost="200" waves="2" trapcap="1">One more allowed on the map</tier>
+      <tier name="Slow Drying" cost="350" waves="3" trapduration="40">Lasts 40% longer</tier>
+    </line>
+    <line id="boulder" group="trap" target="boulder" title="Boulder">
+      <tier name="Granite" cost="100" waves="1" traphealth="30">+30% health</tier>
+      <tier name="Spare Rocks" cost="200" waves="2" trapcap="1">One more allowed on the map</tier>
+      <tier name="Mountain Stone" cost="350" waves="3" traphealth="40">+40% health</tier>
+    </line>
+    <line id="fortify" group="keep" target="fortify" title="Fortify">
+      <tier name="Stout Gate" cost="100" waves="1" lives="1">+1 extra life</tier>
+      <tier name="Iron Portcullis" cost="200" waves="2" lives="1">+1 more extra life</tier>
+      <tier name="Hold the Line" cost="350" waves="3" lives="1">+1 more extra life</tier>
+    </line>
+    <line id="volley" group="keep" target="volley" title="Volley">
+      <tier name="Archers on the Wall" cost="100" waves="1" cooldown="90" power="12">Every creature near the keep takes 12% of its health, every 90 s</tier>
+      <tier name="Massed Volley" cost="200" waves="2" cooldown="70" power="20">20%, every 70 s</tier>
+      <tier name="Rain of Arrows" cost="350" waves="3" cooldown="50" power="30">30%, every 50 s</tier>
+    </line>
+    <line id="rally" group="keep" target="rally" title="Rally">
+      <tier name="Battle Cry" cost="100" waves="1" cooldown="80" power="25" time="10">Towers fire 25% faster for 10 s, every 80 s</tier>
+      <tier name="War Drums" cost="200" waves="2" cooldown="60" power="35" time="10">35%, every 60 s</tier>
+      <tier name="Banner of Kings" cost="350" waves="3" cooldown="45" power="50" time="10">50%, every 45 s</tier>
+    </line>
+    <line id="mend" group="keep" target="mend" title="Mend">
+      <tier name="Field Repairs" cost="100" waves="1" cooldown="90" power="40">Heals every tower by 40%, every 90 s</tier>
+      <tier name="Master Masons" cost="200" waves="2" cooldown="70" power="70">70%, every 70 s</tier>
+      <tier name="Rebuilt Overnight" cost="350" waves="3" cooldown="50" power="100">100%, every 50 s</tier>
+    </line>
+    <line id="frost" group="keep" target="frost" title="Frost Horn">
+      <tier name="Horn of Winter" cost="100" waves="1" cooldown="100" power="60" time="6">Slows every creature to 60% for 6 s, every 100 s</tier>
+      <tier name="Howling Gale" cost="200" waves="2" cooldown="80" power="50" time="8">50% for 8 s, every 80 s</tier>
+      <tier name="Wintertide" cost="350" waves="3" cooldown="60" power="40" time="10">40% for 10 s, every 60 s</tier>
+    </line>
+  </research>

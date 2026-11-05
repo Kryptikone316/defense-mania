@@ -242,6 +242,11 @@ void Enemy::display()
 			if (glueFactor < freezeFactorTemp) freezeFactorTemp = glueFactor;
 			if (tint == 0xFFFFFF) tint = 0xCCDD66;
 		}
+		if ((int)gnow() < frostUntil)
+		{
+			if (frostFactor < freezeFactorTemp) freezeFactorTemp = frostFactor;
+			tint = 0x88CCFF;
+		}
 		if (damage > 0 && (float)((int)gnow() - fireCount) >= (fireRate / freezeFactorTemp))
 		{
 			map->checkTowers((int)position[0], (int)position[1], fireRadius, damage);
@@ -337,7 +342,7 @@ void Enemy::displayGui()
 	}
 }
 
-void Enemy::getDamage(float dmg, float freeze, float chill)
+void Enemy::getDamage(float dmg, float freeze, float chill, float slowMs)
 {
 	int now = (int)gnow();
 	if (freeze > 0)
@@ -345,9 +350,9 @@ void Enemy::getDamage(float dmg, float freeze, float chill)
 		freezeCount = now;
 		freezeFactor = freeze;
 		frozen = true;
-		freezeTime = 2500;
+		freezeTime = (int)slowMs;
 		if (now >= chillUntil || chill > chillPct) chillPct = chill;   /* a slowed creature takes more damage from every tower for as long as the slow lasts */
-		chillUntil = now + 2500;
+		chillUntil = now + (int)slowMs;
 	}
 	if (now < chillUntil && chillPct > 0) dmg *= 1.0f + chillPct / 100.0f;
 	if (armor > 0)
@@ -373,9 +378,9 @@ void Enemy::getDamage(float dmg, float freeze, float chill)
 	}
 }
 
-void Enemy::hitByTower(float dmg, float freeze, float chill) { getDamage(dmg, freeze, chill); }
+void Enemy::hitByTower(float dmg, float freeze, float chill, float slowMs) { getDamage(dmg, freeze, chill, slowMs); }
 
-void Enemy::hitByTower(float dmg, float freeze, Tower *tower, float multiplier, float chill)
+void Enemy::hitByTower(float dmg, float freeze, Tower *tower, float multiplier, float chill, float slowMs)
 {
 	int hitDamage = (int)dmg;
 	bool found = false;
@@ -391,7 +396,7 @@ void Enemy::hitByTower(float dmg, float freeze, Tower *tower, float multiplier, 
 		TowerHit h = { tower, 1, (int)dmg, multiplier };
 		towerHits.push_back(h);
 	}
-	getDamage((float)hitDamage, freeze, chill);
+	getDamage((float)hitDamage, freeze, chill, slowMs);
 }
 
 void Enemy::hitAnimation(const std::string &cs, int x)
@@ -439,7 +444,7 @@ std::string Map::trapProblem(int type, float px, float py) const
 {
 	if (type < 0 || type >= (int)trapTypes.size()) return "No such trap";
 	const TrapType &t = trapTypes[type];
-	if (trapCount(type) >= t.cap) return "You can have no more of these";
+	if (trapCount(type) >= trapCap(type)) return "You can have no more of these";
 	if (money < t.costs) return "Not enough gold";
 	if (pathPts.size() >= 2 && (dist(px, py, pathPts.front().first, pathPts.front().second) < 90 || dist(px, py, pathPts.back().first, pathPts.back().second) < 90))
 		return "Too close to the start or the end";
@@ -458,7 +463,9 @@ bool Map::addTrap(int type, float px, float py)
 	if (type < 4) stats.trapsBuilt[type]++;
 	Trap tr;
 	tr.id = ++trapSerial; tr.type = type; tr.x = px; tr.y = py; tr.born = (int)gnow();
-	tr.charges = (float)t.charges; tr.health = (float)t.health;
+	const TrapMods &tm = trapMods[type];
+	tr.charges = (float)t.charges * tm.charges; tr.maxCharges = tr.charges; tr.health = (float)t.health * tm.health; tr.maxHealth = tr.health;
+	tr.damage = t.damage * tm.damage; tr.slow = t.slow - tm.slow < 0.2f ? 0.2f : t.slow - tm.slow; tr.duration = (int)(t.duration * tm.duration);
 	traps.push_back(tr);
 	sfx_play(SFX_BUILD);
 	return true;
@@ -540,7 +547,7 @@ void Map::updateTraps()
 				if (!e->alive() || e->flying || e->position[0] <= 0 || dist(e->position[0], e->position[1], t.x, t.y) > tt.radius) continue;
 				if (tt.kind == "glue")
 				{
-					e->glueFactor = now >= e->glueUntil ? tt.slow : (tt.slow < e->glueFactor ? tt.slow : e->glueFactor);
+					e->glueFactor = now >= e->glueUntil ? t.slow : (t.slow < e->glueFactor ? t.slow : e->glueFactor);
 					e->glueUntil = now + 250;
 				}
 				else if (tt.kind == "spikes")
@@ -550,7 +557,7 @@ void Map::updateTraps()
 					for (; h < t.hits.size(); h++) if (t.hits[h].first == e) { last = t.hits[h].second; break; }
 					if (now - last >= tt.interval)
 					{
-						e->hitByTower(tt.damage, 0);
+						e->hitByTower(t.damage, 0);
 						t.charges -= 1;
 						if (h < t.hits.size()) t.hits[h].second = now; else t.hits.push_back(std::make_pair(e, now));
 					}
@@ -576,7 +583,7 @@ void Map::updateTraps()
 	{
 		Trap &t = traps[i];
 		const TrapType &tt = trapTypes[t.type];
-		bool gone = (tt.kind == "spikes" && t.charges <= 0) || (tt.kind == "glue" && now - t.born > tt.duration) || (tt.kind == "boulder" && t.health <= 0);
+		bool gone = (tt.kind == "spikes" && t.charges <= 0) || (tt.kind == "glue" && now - t.born > t.duration) || (tt.kind == "boulder" && t.health <= 0);
 		if (gone) traps.erase(traps.begin() + i); else i++;
 	}
 }
@@ -600,25 +607,213 @@ void Map::drawTraps()
 		int alpha = 255;
 		if (tt.kind == "glue")
 		{
-			int left = tt.duration - (now - t.born);
+			int left = t.duration - (now - t.born);
 			alpha = left < 4000 ? 90 + left * 165 / 4000 : 255;   /* it dries up */
 		}
 		draw_image_center(tt.picture, t.x - camX, t.y - camY, 0, 0, -1, -1, alpha, 0xFFFFFF);
-		if (tt.kind == "boulder" && tt.health > 0)
+		if (tt.kind == "boulder" && t.maxHealth > 0)
 		{
-			if (t.health < tt.health * 0.66f && tt.crack[0].valid()) draw_image_center(tt.crack[0], t.x - camX, t.y - camY);
-			if (t.health < tt.health * 0.33f && tt.crack[1].valid()) draw_image_center(tt.crack[1], t.x - camX, t.y - camY);
+			if (t.health < t.maxHealth * 0.66f && tt.crack[0].valid()) draw_image_center(tt.crack[0], t.x - camX, t.y - camY);
+			if (t.health < t.maxHealth * 0.33f && tt.crack[1].valid()) draw_image_center(tt.crack[1], t.x - camX, t.y - camY);
 		}
-		if (tt.kind == "boulder" && t.health < tt.health)
+		if (tt.kind == "boulder" && t.health < t.maxHealth)
 		{
 			int w = 30, x = (int)(t.x - camX) - w / 2, y = (int)(t.y - camY) - 28;
 			fill_rect(x, y, w, 3, 0xCC0033);
-			fill_rect(x, y, (int)(w * (t.health > 0 ? t.health : 0) / tt.health), 3, 0x00CC33);
+			fill_rect(x, y, (int)(w * (t.health > 0 ? t.health : 0) / t.maxHealth), 3, 0x00CC33);
 			rect_outline(x - 1, y - 1, w + 2, 5, 0x323232);
 		}
-		else if (tt.kind == "spikes" && t.charges < tt.charges / 3)
+		else if (tt.kind == "spikes" && t.charges < t.maxCharges / 3)
 			fill_rect((int)(t.x - camX) - 8, (int)(t.y - camY) - 14, 16, 2, 0xFFAA33);   /* nearly worn out */
 	}
+}
+
+float Tower::slowFactor() const
+{
+	if (freeze <= 0) return 0;
+	float f = freeze - map->towerMods[typeIdx].slow;
+	return f < 0.2f ? 0.2f : f;
+}
+float Tower::slowMs() const { return 2500.0f * map->towerMods[typeIdx].slowtime; }
+
+/* ------------------------------------------------------------------ the Bastion: notices, research, specials */
+void Map::pushNotice(const std::string &s) { noticeQueue.push_back(s); }
+
+void Map::updateNotices()
+{
+	int now = (int)millis();
+	if (now >= noticeUntil && !noticeQueue.empty())
+	{
+		notice = noticeQueue.front();
+		noticeQueue.erase(noticeQueue.begin());
+		noticeUntil = now + 3500;
+	}
+}
+
+bool Map::nearBastion(float wx, float wy) const { return dist(wx, wy, bastionX, bastionY) <= 40; }
+
+int Map::trapCap(int type) const
+{
+	if (type < 0 || type >= (int)trapTypes.size()) return 0;
+	return trapTypes[type].cap + (type < (int)trapMods.size() ? trapMods[type].cap : 0);
+}
+
+int Map::specialLine(const char *id) const
+{
+	for (size_t i = 0; i < research.size(); i++)
+		if (research[i].id == id) return (int)i;
+	return -1;
+}
+int Map::specialLevel(const char *id) const
+{
+	int l = specialLine(id);
+	return l < 0 ? 0 : research[l].done;
+}
+
+std::string Map::researchProblem(int line) const
+{
+	if (line < 0 || line >= (int)research.size()) return "No such research";
+	const ResearchLine &r = research[line];
+	if (researchActive >= 0) return "Another project is under way";
+	if (r.done >= (int)r.tier.size()) return "Fully researched";
+	if (money < r.tier[r.done].cost) return "Not enough gold";
+	return "";
+}
+
+bool Map::startResearch(int line)
+{
+	if (!researchProblem(line).empty()) return false;
+	const ResearchTier &t = research[line].tier[research[line].done];
+	money -= t.cost;
+	stats.goldSpent += t.cost;
+	researchActive = line;
+	researchLeft = t.waves;
+	sfx_play(SFX_BUILD);
+	return true;
+}
+
+void Map::researchWaveDone()
+{
+	if (researchActive < 0) return;
+	if (--researchLeft > 0) return;
+	ResearchLine &r = research[researchActive];
+	const ResearchTier &t = r.tier[r.done];
+	r.done++;
+	researchActive = -1;
+	stats.researchDone++;
+	applyResearch();
+	pushNotice("RESEARCH COMPLETE:  " + r.title + " - " + t.name);
+	sfx_play(SFX_UPGRADE);
+}
+
+/* the finished tiers, added up into the multipliers the towers and traps use */
+void Map::applyResearch()
+{
+	towerMods.assign(towerTypes.size(), TowerMods());
+	trapMods.assign(trapTypes.size(), TrapMods());
+	int lives = 0;
+	for (size_t i = 0; i < research.size(); i++)
+	{
+		const ResearchLine &r = research[i];
+		for (int k = 0; k < r.done && k < (int)r.tier.size(); k++)
+		{
+			const ResearchTier &t = r.tier[k];
+			if (r.group == "tower")
+			{
+				for (size_t ti = 0; ti < towerTypes.size(); ti++)
+					if (towerTypes[ti].name == r.target)
+					{
+						TowerMods &m = towerMods[ti];
+						m.damage += t.get("damage") / 100; m.rate += t.get("rate") / 100; m.reach += t.get("reach") / 100; m.splash += t.get("splash") / 100;
+						m.slowtime += t.get("slowtime") / 100; m.suprange += t.get("suprange") / 100;
+						m.chill += t.get("chill"); m.slow += t.get("slow"); m.ramp += t.get("ramp"); m.supheal += t.get("supheal"); m.supgold += t.get("supgold");
+					}
+			}
+			else if (r.group == "trap")
+			{
+				for (size_t ti = 0; ti < trapTypes.size(); ti++)
+					if (trapTypes[ti].id == r.target)
+					{
+						TrapMods &m = trapMods[ti];
+						m.damage += t.get("trapdamage") / 100; m.charges += t.get("trapcharges") / 100; m.duration += t.get("trapduration") / 100;
+						m.health += t.get("traphealth") / 100; m.slow += t.get("trapslow"); m.cap += (int)t.get("trapcap");
+					}
+			}
+			else if (r.id == "fortify")
+				lives += (int)t.get("lives");
+		}
+	}
+	if (lives > extraLives) { lifes += lives - extraLives; extraLives = lives; }   /* the extra lives are added once */
+}
+
+/* the Bastion's specials: 0 Volley, 1 Rally, 2 Mend, 3 Frost Horn */
+static const char *kSpecialId[4] = { "volley", "rally", "mend", "frost" };
+
+std::string Map::specialProblem(int idx) const
+{
+	if (idx < 0 || idx > 3) return "No such action";
+	if (specialLevel(kSpecialId[idx]) <= 0) return "Not researched yet";
+	int left = specialReadyAt[idx] - (int)gnow();
+	if (left > 0) { char b[48]; snprintf(b, sizeof b, "Ready in %d s", (left + 999) / 1000); return b; }
+	if (defeated || !waves || !waves->started) return "Only while a wave is on";
+	return "";
+}
+
+bool Map::useSpecial(int idx)
+{
+	if (!specialProblem(idx).empty()) return false;
+	const ResearchLine &r = research[specialLine(kSpecialId[idx])];
+	const ResearchTier &t = r.tier[r.done - 1];
+	int now = (int)gnow();
+	float power = t.get("power"), time = t.get("time");
+	specialReadyAt[idx] = now + (int)(t.get("cooldown") * 1000);
+	stats.specialsUsed++;
+	if (idx == 0)   /* Volley: every creature near the keep takes a share of its health */
+	{
+		Wave *w = waves->waves[waves->current];
+		for (size_t k = 0; k < w->list.size(); k++)
+		{
+			Enemy *e = w->list[k];
+			if (!e->alive() || e->position[0] <= 0 || dist(e->position[0], e->position[1], bastionX, bastionY) > 220) continue;
+			float d = e->maxHealthValue() * power / 100.0f;
+			e->hitByTower(d < 20 ? 20 : d, 0);
+		}
+		volleyUntil = (int)millis() + 700;
+		sfx_play(SFX_ARROW);
+		pushNotice("VOLLEY!");
+	}
+	else if (idx == 1)   /* Rally */
+	{
+		rallyUntil = now + (int)(time * 1000);
+		rallyPower = power;
+		sfx_play(SFX_UPGRADE);
+		pushNotice("RALLY!  towers fire faster");
+	}
+	else if (idx == 2)   /* Mend */
+	{
+		for (size_t i = 0; i < towers.size(); i++)
+			if (!towers[i]->destroyed)
+			{
+				int h = towers[i]->health + (int)(towers[i]->maxHealth * power / 100.0f);
+				towers[i]->health = h > towers[i]->maxHealth ? towers[i]->maxHealth : h;
+			}
+		sfx_play(SFX_REPAIR);
+		pushNotice("MEND!  towers repaired");
+	}
+	else   /* Frost Horn: every creature, flyers too */
+	{
+		Wave *w = waves->waves[waves->current];
+		for (size_t k = 0; k < w->list.size(); k++)
+		{
+			Enemy *e = w->list[k];
+			if (!e->alive()) continue;
+			e->frostUntil = now + (int)(time * 1000);
+			e->frostFactor = power / 100.0f;
+		}
+		sfx_play(SFX_FREEZE);
+		pushNotice("FROST HORN!  everything slows");
+	}
+	return true;
 }
 
 void Map::applySupport()
@@ -634,7 +829,8 @@ void Map::applySupport()
 	{
 		Tower *t = towers[i];
 		t->buffRate = 1.0f;
-		if (t->support || t->destroyed || depots.empty()) continue;
+		if (t->support || t->destroyed) continue;
+		if (depots.empty()) { t->buffRate = (int)gnow() < rallyUntil ? 1.0f + rallyPower / 100.0f : 1.0f; continue; }
 		float tx, ty, rate = 0, heal = 0;
 		t->center(tx, ty);
 		for (size_t k = 0; k < depots.size(); k++)
@@ -642,13 +838,15 @@ void Map::applySupport()
 			float dx, dy;
 			depots[k]->center(dx, dy);
 			const SupportLevel &s = depots[k]->supportNow();
-			if ((tx - dx) * (tx - dx) + (ty - dy) * (ty - dy) <= s.range * s.range)
+			const TowerMods &dm = towerMods[depots[k]->typeIdx];
+			float range = s.range * dm.suprange;
+			if ((tx - dx) * (tx - dx) + (ty - dy) * (ty - dy) <= range * range)
 			{
 				if (s.rate > rate) rate = s.rate;   /* the strongest depot counts, they do not add up */
-				if (s.heal > heal) heal = s.heal;
+				if (s.heal + dm.supheal > heal) heal = s.heal + dm.supheal;
 			}
 		}
-		t->buffRate = 1.0f + rate / 100.0f;
+		t->buffRate = (1.0f + rate / 100.0f) * ((int)gnow() < rallyUntil ? 1.0f + rallyPower / 100.0f : 1.0f);
 		if (heal > 0 && t->health < t->maxHealth)
 		{
 			t->healCarry += t->maxHealth * heal / 100.0f * dt / 1000.0f;
@@ -672,9 +870,11 @@ float Map::supportGold(float x, float y, float killGold) const
 		float dx, dy;
 		d->center(dx, dy);
 		const SupportLevel &s = d->supportNow();
-		if ((x - dx) * (x - dx) + (y - dy) * (y - dy) <= s.range * s.range)
+		const TowerMods &dm = towerMods[d->typeIdx];
+		float range = s.range * dm.suprange;
+		if ((x - dx) * (x - dx) + (y - dy) * (y - dy) <= range * range)
 		{
-			float g = s.gold + killGold * s.goldPct / 100.0f;
+			float g = s.gold + dm.supgold + killGold * s.goldPct / 100.0f;
 			if (g > best) best = g;   /* the strongest depot counts */
 		}
 	}
@@ -842,6 +1042,7 @@ void Waves::waveComplete()
 	if (waves[current]->complete() && !map->defeated)
 	{
 		map->wavesCleared = current + 1;
+		map->researchWaveDone();
 		if (!endless && current + 1 >= (int)waves.size())
 			map->wonGame();
 		else
@@ -849,13 +1050,27 @@ void Waves::waveComplete()
 			current++;
 			ensureNext();
 			map->continueNextWave();
+			int every = (int)cfg_num("endless_bonus_every", 5);
+			if (endless && every > 0 && current % every == 0)
+			{   /* Endless: a supply drop every few waves, a little bigger each time, to keep players going */
+				int milestone = current / every;
+				float gold = (float)cfg_num("endless_bonus_gold", 120) * (1.0f + (float)cfg_num("endless_bonus_growth", 0.15) * (milestone - 1))
+				             * (1.0f + (float)cfg_num("gold_difficulty_step", 0.10) * (map->difficulty - 1));
+				int got = map->award(gold);
+				map->stats.goldEarned += got;
+				char b[64];
+				snprintf(b, sizeof b, "SUPPLY DROP  +%d gold", got);
+				map->pushNotice(b);
+				sfx_play(SFX_UPGRADE);
+			}
 		}
 	}
 }
 
 /* ------------------------------------------------------------------ tower */
-Tower::Tower(const TowerType &t, int x, int y, Map *m) : map(m)
+Tower::Tower(const TowerType &t, int x, int y, Map *m, int type) : map(m)
 {
+	typeIdx = type;
 	position[0] = x;
 	position[1] = y;
 	towerTileSize = t.tileSize;
@@ -974,7 +1189,7 @@ void Tower::checkEnemy()
 	if (!map->waves)
 		return;
 	int tile = map->tileSize;
-	Enemy *e = map->waves->started ? map->waves->waves[map->waves->current]->checkEnemy((int)((position[0] + 0.5) * tile), (int)((position[1] + 0.5) * tile), (fireRadius / 2) + (towerTileSize / 4), freeze, groundOnly) : NULL;
+	Enemy *e = map->waves->started ? map->waves->waves[map->waves->current]->checkEnemy((int)((position[0] + 0.5) * tile), (int)((position[1] + 0.5) * tile), (int)(((fireRadius / 2) + (towerTileSize / 4)) * map->towerMods[typeIdx].reach), freeze, groundOnly) : NULL;
 	if (e)
 	{
 		shootAt = e;
@@ -1078,7 +1293,7 @@ void Tower::display()
 				dbgCol = (currentUpdate * 9) + animationState; dbgRow = towerDirection; if (frame_ok(sheet, dbgCol, dbgRow)) drawnFrame = g_mapFrame;
 				frame_center(sheet, (currentUpdate * 9) + animationState, towerDirection, cx, cy, 255, tint);
 			}
-			if (!support && (float)((int)gnow() - fireCount) >= (fireRate / buffRate))
+			if (!support && (float)((int)gnow() - fireCount) >= (fireRate / (buffRate * map->towerMods[typeIdx].rate)))
 			{
 				checkEnemy();
 				fireCount = gnow();
@@ -1121,7 +1336,7 @@ void Tower::displayGui()
 	if (showRadius && !destroyed)
 	{
 		float cx = (position[0] + 0.5f) * tile - camX, cy = (position[1] + 0.5f) * tile - camY;
-		float reach = support ? supportNow().range : fireRadius / 2.0f + towerTileSize / 4.0f;   /* what the tower really reaches */
+		float reach = support ? supportNow().range * map->towerMods[typeIdx].suprange : (fireRadius / 2.0f + towerTileSize / 4.0f) * map->towerMods[typeIdx].reach;   /* what the tower really reaches */
 		uint32_t col = support ? 0x99CCFF : 0xCCFF99;
 		fill_circle(cx, cy, reach, col, 60);
 		circle_outline(cx, cy, reach, col, 200);
@@ -1162,11 +1377,11 @@ void Tower::displayArrow()
 		if (shootAt)
 		{
 			if (damageIncrease > 0)
-				shootAt->hitByTower((float)damage, freeze, this, damageIncrease, chillNow());
+				shootAt->hitByTower((float)damage * map->towerMods[typeIdx].damage, slowFactor(), this, damageIncrease + (damageIncrease > 0 ? map->towerMods[typeIdx].ramp : 0), chillNow() + map->towerMods[typeIdx].chill, slowMs());
 			else
-				shootAt->hitByTower((float)damage, freeze, chillNow());
+				shootAt->hitByTower((float)damage * map->towerMods[typeIdx].damage, slowFactor(), chillNow() + map->towerMods[typeIdx].chill, slowMs());
 			if (splash && map->waves)
-				map->waves->waves[map->waves->current]->splash(shootAt, (float)damage, splashRadius, splashFactor);
+				map->waves->waves[map->waves->current]->splash(shootAt, (float)damage * map->towerMods[typeIdx].damage, (int)(splashRadius * map->towerMods[typeIdx].splash), splashFactor);
 			if (explosionAtEnemy)
 				shootAt->hitAnimation(sheetFile, 6 + currentUpdate * 9);
 			else
@@ -1223,6 +1438,7 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 	mapH = rows * tileSize;
 	money = tree.child("game")->num("startmoney");
 	lifes = tree.child("game")->num("lifes");
+	baseLifes = lifes;
 
 	/* the collision layer: columns separated by '_', rows by '#', each tile "kind,variant" */
 	std::vector<const XNode *> levels = tree.list("levels/level");
@@ -1316,6 +1532,7 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 		towerTypes.push_back(tt);
 	}
 
+	bastionX = (float)end[0]; bastionY = (float)end[1];
 	pathPts.push_back(std::make_pair((float)start[0], (float)start[1]));
 	for (size_t i = 0; i < way.size(); i++) pathPts.push_back(std::make_pair((float)way[i].first, (float)way[i].second));
 	pathPts.push_back(std::make_pair((float)end[0], (float)end[1]));
@@ -1342,11 +1559,42 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 			}
 		}
 	}
+	{
+		XNode rs;
+		if (xml_load("data/research.xml", rs))
+		{
+			std::vector<const XNode *> ll = rs.list("line");
+			for (size_t k = 0; k < ll.size(); k++)
+			{
+				ResearchLine r;
+				r.id = ll[k]->str("id"); r.group = ll[k]->str("group"); r.target = ll[k]->str("target"); r.title = ll[k]->str("title");
+				std::vector<const XNode *> tl = ll[k]->list("tier");
+				for (size_t j = 0; j < tl.size(); j++)
+				{
+					ResearchTier t;
+					t.name = tl[j]->str("name"); t.cost = tl[j]->num("cost"); t.waves = tl[j]->num("waves");
+					t.text = tl[j]->text;
+					while (!t.text.empty() && isspace((unsigned char)t.text[0])) t.text.erase(0, 1);
+					while (!t.text.empty() && isspace((unsigned char)t.text[t.text.size() - 1])) t.text.resize(t.text.size() - 1);
+					for (size_t a = 0; a < tl[j]->attrs.size(); a++)
+					{
+						const std::string &key = tl[j]->attrs[a].first;
+						if (key != "name" && key != "cost" && key != "waves") t.eff.push_back(std::make_pair(key, (float)atof(tl[j]->attrs[a].second.c_str())));
+					}
+					r.tier.push_back(t);
+				}
+				research.push_back(r);
+			}
+		}
+	}
+	towerMods.assign(towerTypes.size(), TowerMods());
+	trapMods.assign(trapTypes.size(), TrapMods());
 	if (!load_image565(path + "/data/map.png", mapImage))
 		return;
 	load_image("data/hud_top.png", hudTop);
 	load_image("data/hud_bottom.png", hudBottom);
 	load_image("data/money.png", moneyImg);
+	load_image("data/bastion.png", bastionImg);
 	load_image("data/life.png", lifeImg);
 	load_image("data/hud_pause.png", hudPause);
 	load_image("data/hud_play.png", hudPlay);
@@ -1404,7 +1652,7 @@ void Map::addTower(int type, int tx, int ty)
 		money -= t.costs;
 		stats.goldSpent += t.costs;
 		if (type < 8) stats.built[type]++;
-		towers.push_back(new Tower(t, tx, ty, this));
+		towers.push_back(new Tower(t, tx, ty, this, type));
 		sfx_play(SFX_BUILD);
 	}
 	else
@@ -1452,6 +1700,7 @@ void Map::display()
 	game_clock_advance();
 	applySupport();
 	updateTraps();
+	updateNotices();
 	if (showBuildAreas)
 	{
 		if (areasImage.px.empty())   /* once: a copy of the map with the build areas blended in, so showing them costs nothing per frame */
@@ -1473,6 +1722,12 @@ void Map::display()
 	else
 		blit565_window(mapImage, camX, camY);
 	drawTraps();
+	if (bastionImg.valid()) draw_image_center(bastionImg, bastionX - camX, bastionY - camY - 12);
+	if ((int)millis() < volleyUntil)
+	{
+		float f = (volleyUntil - (int)millis()) / 700.0f;
+		circle_outline(bastionX - camX, bastionY - camY, 220, 0xFFD070, (int)(220 * f));
+	}
 	uint32_t p1 = millis();
 	/* towers and enemies, back to front */
 	std::vector<DrawItem> items;
