@@ -20,6 +20,7 @@ bool gfx_init();                         /* display, canvas, fonts */
 void gfx_present();                      /* shows the canvas (or dumps it for the QEMU tests) */
 void gfx_clear(uint8_t r, uint8_t g, uint8_t b);
 unsigned gfx_pad();                      /* held buttons, one bit per JK_* of joykey.hpp */
+void gfx_mark_frame();                  /* test hook: see DM_SHOTS with negative numbers */
 uint32_t millis();
 void gfx_canvas_info(unsigned long out[3]);   /* canvas pointer, width, height - for the crash report */
 

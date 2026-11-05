@@ -653,7 +653,42 @@ void Map::updateNotices()
 	}
 }
 
-bool Map::nearBastion(float wx, float wy) const { return dist(wx, wy, bastionX, bastionY) <= 40; }
+bool Map::nearBastion(float wx, float wy) const { return fabsf(wx - keepX) <= 38 && wy >= keepY - 128 && wy <= keepY + 8; }
+bool Map::keepBlocks(int wx, int wy) const { return fabsf(wx - keepX) <= 40 && wy >= keepY - 34 && wy <= keepY + 6; }
+
+/* The keep is 64 px wide and 128 tall (two of the towers' tiles). It stands beside the end of the path, as near as it can without covering any of the
+   path (the creatures and soldiers are drawn over the keep, so a path hidden behind it would be walked on air), on either side of the last stretch. */
+void Map::placeKeep()
+{
+	float px = pathPts.size() >= 2 ? pathPts[pathPts.size() - 2].first : bastionX - 1, py = pathPts.size() >= 2 ? pathPts[pathPts.size() - 2].second : bastionY;
+	float ux = bastionX - px, uy = bastionY - py, len = sqrtf(ux * ux + uy * uy);
+	if (len < 1) { ux = 1; uy = 0; len = 1; }
+	ux /= len; uy /= len;
+	float bestCost = 1e30f;
+	keepX = bastionX; keepY = bastionY;
+	for (int side = 0; side < 2; side++)
+	{
+		float nx = side == 0 ? uy : -uy, ny = side == 0 ? -ux : ux;   /* the two sides of the path; the first is the left, up on a path that runs right */
+		float base = 16 + 32 * fabsf(nx) + 24 * (ny > 0 ? ny : 0);
+		for (float extra = 0; extra <= 300; extra += 6)
+		{
+			float fx = bastionX + nx * (base + extra) - ux * 20, fy = bastionY + ny * (base + extra) - uy * 20;
+			if (fx < 34) fx = 34;
+			if (fx > mapW - 34) fx = (float)mapW - 34;
+			if (fy < 128) fy = 128;
+			if (fy > mapH - 2) fy = (float)mapH - 2;
+			bool clear = true;
+			for (float sy = fy - 128; sy <= fy && clear; sy += 12)
+				for (float sx = fx - 34; sx <= fx + 34 && clear; sx += 12)
+				{
+					float qx, qy;
+					if (nearPath(sx, sy, 16, qx, qy)) clear = false;
+				}
+			float cost = dist(fx, fy - 40, bastionX, bastionY) + (side == 1 ? 4 : 0);
+			if (clear && cost < bestCost) { bestCost = cost; keepX = fx; keepY = fy; break; }
+		}
+	}
+}
 
 int Map::trapCap(int type) const
 {
@@ -963,6 +998,13 @@ void Map::soldierDamage(float x, float y, float radius, float dmg)
 	}
 }
 
+/* a row of a sheet (the monsters' order: 0 down, 1 left, 2 right, 3 up) for a way of looking */
+static int dir_row(float dx, float dy)
+{
+	if (fabsf(dx) >= fabsf(dy)) return dx > 0 ? 2 : 1;
+	return dy > 0 ? 0 : 3;
+}
+
 void Map::updateSoldiers()
 {
 	if (soldiers.empty()) return;
@@ -990,6 +1032,7 @@ void Map::updateSoldiers()
 			sd.moving = true;
 			if (sd.s < 60) gone = true;
 			pathAt(sd.s, sd.x, sd.y, sd.dirX, sd.dirY);
+			sd.face = dir_row(-sd.dirX, -sd.dirY);
 			for (size_t k = 0; k < w->list.size() && !gone; k++)
 			{
 				Enemy *e = w->list[k];
@@ -1003,8 +1046,10 @@ void Map::updateSoldiers()
 				float rshare = e->maxHealthValue() * st.pct / 100.0f * (sd.damage / st.damage);
 				if (rshare > rd) rd = rshare;
 				stats.soldierDamage += rd;
+				sd.dealt += rd; sd.nhits++;
 				e->hitByTower(rd, 0);
 				if (!e->alive()) stats.soldierKills++;
+				sd.strikeAt = now;
 				sd.health -= st.wear + st.wearpct / 100.0f * e->maxHealthValue();   /* the boulder wears with every creature it hits */
 				sfx_play(SFX_CRUMBLE);
 			}
@@ -1038,7 +1083,9 @@ void Map::updateSoldiers()
 					sd.s = sd.s < lo ? lo : sd.s > len - 30 ? len - 30 : sd.s;
 					pathAt(sd.s, sd.x, sd.y, sd.dirX, sd.dirY);
 					sd.moving = true;
+					sd.face = dir_row((es < sd.s ? -1.0f : 1.0f) * sd.dirX, (es < sd.s ? -1.0f : 1.0f) * sd.dirY);
 				}
+				else if (d > 1) sd.face = dir_row(sd.target->position[0] - sd.x, sd.target->position[1] - sd.y);
 			}
 			if (now >= sd.nextHit)
 			{
@@ -1065,9 +1112,12 @@ void Map::updateSoldiers()
 						if (st.pierce) dmg += tgt->armor;
 					}
 					stats.soldierDamage += dmg;
+					sd.dealt += dmg; sd.nhits++;
 					tgt->hitByTower(dmg, 0);
 					if (!tgt->alive()) stats.soldierKills++;
 					sd.nextHit = now + (int)st.rate;
+					sd.strikeAt = now;
+					sd.face = dir_row(tgt->position[0] - sd.x, tgt->position[1] - sd.y);
 					sd.flashX = tgt->position[0]; sd.flashY = tgt->position[1];
 					sd.flashUntil = (int)millis() + 140;
 					if (st.ranged) sfx_play(SFX_ARROW);
@@ -1087,8 +1137,25 @@ void Map::updateSoldiers()
 				fflush(stdout);
 			}
 		}
-		if (gone) soldiers.erase(soldiers.begin() + i); else i++;
+		if (gone)
+		{
+			if (getenv("DM_SOLDLOG")) { printf("SOLDEND %s %s age %d/%d hits %d dealt %.0f hp %.0f/%.0f wave %d\n", st.id.c_str(), sd.health <= 0 ? "KILLED" : "time", now - sd.born, sd.life, sd.nhits, sd.dealt, sd.health, sd.maxHealth, waves ? waves->current : -1); fflush(stdout); }
+			Fallen f;
+			f.type = sd.type; f.face = sd.face; f.at = now; f.x = sd.x; f.y = sd.y; f.killed = sd.health <= 0;
+			fallen.push_back(f);
+			soldiers.erase(soldiers.begin() + i);
+		}
+		else i++;
 	}
+}
+
+/* One soldier frame: its sheet is 64 px tiles, six across (three walking, three striking) and eight down (four ways of looking, then four of dying);
+   a picture that is not a sheet (an older data folder) is drawn whole. */
+static void soldier_frame(const SoldierType &st, int col, int row, float x, float y, int alpha)
+{
+	if (!st.picture.valid()) return;
+	if (st.picture.w >= 384) draw_image_center(st.picture, x, y - 20, col * 64, row * 64, 64, 64, alpha, 0xFFFFFF);
+	else draw_image_center(st.picture, x, y - 12, 0, 0, -1, -1, alpha, 0xFFFFFF);
 }
 
 void Map::drawSoldiers()
@@ -1096,25 +1163,44 @@ void Map::drawSoldiers()
 	int now = (int)gnow();
 	const Image *boulder = NULL;
 	for (size_t k = 0; k < trapTypes.size(); k++) if (trapTypes[k].kind == "boulder") boulder = &trapTypes[k].picture;
+	for (size_t i = fallen.size(); i-- > 0;)   /* the fallen lie under the living */
+	{
+		const Fallen &f = fallen[i];
+		const SoldierType &st = soldierTypes[f.type];
+		int age = now - f.at;
+		if (age < 0 || age > 1900) { fallen.erase(fallen.begin() + i); continue; }
+		float x = f.x - camX, y = f.y - camY;
+		if (f.killed)
+		{
+			int fr = age < 170 ? 0 : age < 340 ? 1 : 2;
+			int alpha = age > 1400 ? 255 - (age - 1400) * 255 / 500 : 255;
+			soldier_frame(st, fr, 4 + f.face, x, y, alpha);
+		}
+		else if (age < 500)   /* its time is up: it turns away and fades */
+			soldier_frame(st, 1, f.face, x, y, 255 - age * 255 / 500);
+	}
 	for (size_t i = 0; i < soldiers.size(); i++)
 	{
 		const Soldier &sd = soldiers[i];
 		const SoldierType &st = soldierTypes[sd.type];
-		float bob = sd.moving ? sinf(now / 90.0f + (float)i) * 1.5f : 0;
-		float x = sd.x - camX, y = sd.y - camY;
+		int col = 1;
+		if (now - sd.strikeAt < 360) col = 3 + (now - sd.strikeAt) / 120;
+		else if (sd.moving) { static const int cyc[4] = { 0, 1, 2, 1 }; col = cyc[(now / 140 + (int)i) & 3]; }
+		float lat = (float)(((int)i % 3) - 1) * 9;   /* a squad stands in a loose row across the path, not all on one spot */
+		float x = sd.x - camX - sd.dirY * lat, y = sd.y - camY + sd.dirX * lat;
 		if (st.roller)
 		{
-			draw_image_center(st.picture, x + sd.dirX * 26, y + sd.dirY * 26 - 12 + bob, 0, 0, -1, -1, 255, 0xFFFFFF);   /* the pusher stands behind the boulder */
+			soldier_frame(st, col, sd.face, x + sd.dirX * 26, y + sd.dirY * 26, 255);   /* the pusher stands behind the boulder */
 			if (boulder && boulder->valid()) draw_image_center(*boulder, x, y, 0, 0, -1, -1, 255, 0xFFFFFF);
 		}
 		else
 		{
-			if ((int)millis() < sd.flashUntil) draw_line((int)x, (int)(y - 12), (int)(sd.flashX - camX), (int)(sd.flashY - camY - 10), 0xFFFFFF);
-			draw_image_center(st.picture, x, y - 12 + bob, 0, 0, -1, -1, 255, 0xFFFFFF);
+			if ((int)millis() < sd.flashUntil) draw_line((int)x, (int)(y - 14), (int)(sd.flashX - camX), (int)(sd.flashY - camY - 10), 0xFFFFFF);
+			soldier_frame(st, col, sd.face, x, y, 255);
 		}
 		if (sd.health < sd.maxHealth)
 		{
-			int bw = 22, bx = (int)x - bw / 2, by = (int)y - (st.roller ? 30 : 32);
+			int bw = 22, bx = (int)x - bw / 2, by = (int)y - 52;
 			fill_rect(bx, by, bw, 3, 0xCC0033);
 			fill_rect(bx, by, (int)(bw * (sd.health > 0 ? sd.health : 0) / sd.maxHealth), 3, 0x3399FF);
 			rect_outline(bx - 1, by - 1, bw + 2, 5, 0x323232);
@@ -1853,6 +1939,7 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 	pathPts.push_back(std::make_pair((float)start[0], (float)start[1]));
 	for (size_t i = 0; i < way.size(); i++) pathPts.push_back(std::make_pair((float)way[i].first, (float)way[i].second));
 	pathPts.push_back(std::make_pair((float)end[0], (float)end[1]));
+	placeKeep();
 	{
 		XNode tr;
 		if (xml_load("data/traps.xml", tr))
@@ -1973,6 +2060,7 @@ bool Map::canBuild(int x, int y) const
 	int tx = x / tileSize, ty = y / tileSize;
 	if (x < 0 || y < 0 || tx >= cols || ty >= rows)
 		return false;
+	if (keepBlocks(tx * tileSize + tileSize / 2, ty * tileSize + tileSize / 2)) return false;
 	int k = tileType[(size_t)tx * rows + ty];
 	return !(k == 1 || k == 3 || k == 4 || k == 5);
 }
@@ -2069,7 +2157,7 @@ void Map::display()
 	else
 		blit565_window(mapImage, camX, camY);
 	drawTraps();
-	if (bastionImg.valid()) draw_image_center(bastionImg, bastionX - camX, bastionY - camY - 12);
+	if (bastionImg.valid()) draw_image_center(bastionImg, keepX - camX, keepY - camY - bastionImg.h / 2 + 6);
 	if ((int)millis() < volleyUntil)
 	{
 		float f = (volleyUntil - (int)millis()) / 700.0f;

@@ -1562,6 +1562,7 @@ int main()
 			}
 			break;
 		case S_GAME:
+			if (getenv("DM_CAMKEEP") && play.map->ok) { camX = (int)play.map->keepX - SW / 2 + atoi(getenv("DM_CAMKEEP")); camY = (int)play.map->keepY - SH / 2 - 20; camera_limits(play.map); }   /* test hook: look at the keep */
 			if (getenv("DM_CRASH_TEST") && (int)millis() - play.started > 4000) *(volatile int *)0 = 1;
 			if (getenv("DM_SOLDIERS") && play.map->ok && play.map->waves && play.map->waves->started && play.map->waves->waves[play.map->waves->current]->begun())
 			{   /* test hook: once the first wave is on, sends one soldier of each kind, to see them at work */
@@ -1573,6 +1574,9 @@ int main()
 					t.eff.push_back(std::make_pair(std::string("count"), 2.0f)); t.eff.push_back(std::make_pair(std::string("time"), 90.0f)); t.eff.push_back(std::make_pair(std::string("zone"), 700.0f));
 					for (int k = 0; k < 4; k++) play.map->spawnSoldiers(k, t);
 				}
+				static int since;
+				if (sent && getenv("DM_SOLDKILL") && ++since == atoi(getenv("DM_SOLDKILL")))   /* and, if asked, kills them all some frames later, to see them fall */
+				{ gfx_mark_frame(); for (size_t k = 0; k < play.map->soldiers.size(); k++) play.map->soldiers[k].health = -1; }
 			}
 			if (getenv("DM_FAKE_RESULT") && (int)millis() - play.started > (getenv("DM_FAKE_DELAY") ? atoi(getenv("DM_FAKE_DELAY")) : 1500) && !play.map->finished)
 			{   /* test hook: end the match at once with some score */

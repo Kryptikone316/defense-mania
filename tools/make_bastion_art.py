@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""Draws the Bastion: a small stone keep with two towers, a gate and a blue banner, 72 x 72, to <data>/bastion.png. Usage: make_bastion_art.py <data folder>   (needs pillow)"""
+"""Draws the Bastion: a small stone keep with two towers, a gate and a blue banner, 72 x 72, to <data>/bastion.png. With a second argument, the Blender render (tools/blender/bastion.py, 256 x 512), the keep is that shrunk to 64 x 128, two of the towers' tiles tall.
+Usage: make_bastion_art.py <data folder> [<render png>]   (needs pillow)"""
 import os, sys
 from PIL import Image, ImageDraw
 DATA = sys.argv[1]
+if len(sys.argv) > 2:
+    big = Image.open(sys.argv[2]).convert('RGBA').convert('RGBa').resize((64, 128), Image.LANCZOS).convert('RGBA')
+    out = Image.new('RGBA', (64, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(out).ellipse((3, 118, 61, 127), fill=(0, 0, 0, 80))
+    out.alpha_composite(big)
+    out.save(os.path.join(DATA, 'bastion.png'))
+    print('bastion 64 x 128 from the render')
+    sys.exit(0)
 S = 4
 n = 72
 im = Image.new('RGBA', (n * S, n * S), (0, 0, 0, 0)); d = ImageDraw.Draw(im)

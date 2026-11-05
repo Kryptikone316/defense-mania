@@ -163,8 +163,11 @@ static unsigned pad_script(unsigned bits)
 
 unsigned gfx_pad() { return pad_script(joykey_read()); }
 
+static int g_curFrame = 0, g_markFrame = -1;
+void gfx_mark_frame() { g_markFrame = g_curFrame; }   /* test hook: shots listed as negative numbers are that many frames after the mark */
 static void dump_frame(int frame)
 {
+	g_curFrame = frame;
 	static const char *dir = getenv("DM_SHOTDIR");
 	static int list[64], nlist = -1;
 	if (!dir)
@@ -181,7 +184,7 @@ static void dump_frame(int frame)
 		}
 	}
 	for (int i = 0; i < nlist; i++)
-		if (list[i] == frame)
+		if (list[i] == frame || (list[i] < 0 && g_markFrame >= 0 && g_markFrame - list[i] == frame))
 		{
 			char path[600];
 			snprintf(path, sizeof path, "%s/frame%05d.ppm", dir, frame);

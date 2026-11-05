@@ -278,8 +278,16 @@ struct Soldier {
 	float zone = 0;   /* a guard holds the last stretch of the path before the keep, this many pixels of it */
 	float health = 0, maxHealth = 0, damage = 0, carry = 0, capTaken = 0, flashX = 0, flashY = 0;
 	bool moving = false;
+	float dealt = 0; int nhits = 0;   /* what it has done, for the log */
+	int face = 0, strikeAt = -100000;   /* which way it looks (a row of its sheet, the monsters' order: down, left, right, up) and when its last blow fell */
 	Enemy *target = NULL;
 	std::vector<std::pair<Enemy *, int> > hits;       /* a boulder roller: when each creature was last hit */
+};
+/* a soldier that is gone: it staggers, tips over and lies there a moment (killed), or fades (its time is up) */
+struct Fallen {
+	int type = 0, face = 0, at = 0;
+	float x = 0, y = 0;
+	bool killed = false;
 };
 
 struct TowerMods {
@@ -327,8 +335,11 @@ public:
 	void pushNotice(const std::string &s);
 	void updateNotices();
 	/* the Bastion: a keep at the exit; research and the specials */
-	float bastionX = 0, bastionY = 0;
+	float bastionX = 0, bastionY = 0;   /* where the path ends: the creatures arrive here, Volley centres here */
+	float keepX = 0, keepY = 0;         /* where the keep itself stands (the middle of its foot): beside the end of the path, not on it */
 	bool nearBastion(float wx, float wy) const;
+	bool keepBlocks(int wx, int wy) const;   /* the keep's footprint is not a building spot */
+	void placeKeep();
 	std::vector<ResearchLine> research;
 	std::vector<TowerMods> towerMods;   /* by tower type */
 	std::vector<TrapMods> trapMods;     /* by trap type */
@@ -336,6 +347,7 @@ public:
 	/* soldiers */
 	std::vector<SoldierType> soldierTypes;
 	std::vector<Soldier> soldiers;
+	std::vector<Fallen> fallen;
 	float soldierOff = 0.3f;     /* the share of its damage a soldier does to creatures it is not trained against */
 	int soldierTick = -1, soldierWave = -1;
 	std::vector<float> pathCum;
