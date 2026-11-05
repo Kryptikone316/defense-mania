@@ -390,7 +390,7 @@ void Enemy::hitAnimation(const std::string &cs, int x)
  * keep up with that). Both rates are in defensemania.cfg. */
 static float gold_factor(int difficulty, int wave, int waves)
 {
-	float diff = 1.0f + (float)cfg_num("gold_difficulty_step", 0.15) * (difficulty - 1);
+	float diff = 1.0f + (float)cfg_num("gold_difficulty_step", 0.10) * (difficulty - 1);
 	float growth = waves > 1 ? (float)cfg_num("gold_wave_growth", 0.8) * wave / (float)(waves - 1) : 0.0f;
 	return diff * (1.0f + growth);
 }

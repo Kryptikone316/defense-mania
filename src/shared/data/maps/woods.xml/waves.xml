@@ -1,57 +1,59 @@
 <?xml version='1.0'?>
   <enemies>
     <waves>
-    
-    	<wave enemydistance="2000">            
-            <enemy charset="charset1.png" icon="icon1.png" tilesize="64" maxhealth="5" money="2" movespeed="60" animationspeed="15" count="10" damage="0">
-            </enemy>            
+
+    	<wave enemydistance="900">
+    		<enemy name="spider" charset="../../river_side.xml/data/charset1.png" icon="../../river_side.xml/data/icon1.png" tilesize="64" maxhealth="7" money="2" movespeed="70" animationspeed="15" count="16" damage="0">
+            </enemy>
         </wave>
-        
-    
-    	<wave enemydistance="1500">
-    		<enemy charset="charset1.png" icon="icon1.png" tilesize="64" maxhealth="5" money="2" movespeed="60" animationspeed="15" count="10" damage="0">
-            </enemy> 
-    		<enemy charset="charset2.png" icon="icon2.png" tilesize="64" maxhealth="50" money="5" movespeed="20" animationspeed="8" count="2" damage="0">
+
+    	<wave enemydistance="700">
+    		<enemy name="spider" charset="../../river_side.xml/data/charset1.png" icon="../../river_side.xml/data/icon1.png" tilesize="64" maxhealth="6" money="2" movespeed="70" animationspeed="15" count="20" damage="0">
             </enemy>
-    	</wave>
-    	
-             	
-        <wave enemydistance="800">
-    		<enemy charset="charset1.png" icon="icon1.png" tilesize="64" maxhealth="10" money="3" movespeed="60" animationspeed="15" count="20" damage="0">
-            </enemy> 
-    	</wave>
-    	
-    	<wave enemydistance="1500">
-    		<enemy charset="charset2.png" icon="icon2.png" tilesize="64" maxhealth="100" money="10" movespeed="35" animationspeed="8" count="4" damage="0">
+    		<enemy name="brood" charset="../../../monsters/brood.png" icon="../../../monsters/brood_icon.png" tilesize="64" maxhealth="11" money="3" movespeed="66" animationspeed="15" count="8" armor="1" attackradius="45" damage="1">
             </enemy>
-    	</wave>    	
-            
-         <wave enemydistance="1000">
-    		<enemy charset="charset3.png" icon="icon3.png" tilesize="64" maxhealth="140" money="14" movespeed="50" animationspeed="10" count="2" damage="8">
-            </enemy> 
-    	</wave>
-    	    	
-    	<wave enemydistance="800">            
-            <enemy charset="charset1.png" icon="icon1.png" tilesize="64" maxhealth="25" money="4" movespeed="80" animationspeed="15" count="25" damage="0">
-            </enemy>            
         </wave>
-        
-         
-         <wave enemydistance="1000">
-    		<enemy charset="charset2.png" icon="icon2.png" tilesize="64" maxhealth="150" money="15" movespeed="50" animationspeed="8" count="3" damage="0">
+
+    	<wave enemydistance="600">
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="11" money="3" movespeed="120" animationspeed="15" count="26" damage="0">
             </enemy>
-            <enemy charset="charset3.png" icon="icon3.png" tilesize="64" maxhealth="200" money="20" movespeed="50" animationspeed="10" count="2" damage="16">
-            </enemy> 
-    	</wave>
-    	
-    	<wave enemydistance="1500">
-    		<enemy charset="charset1.png" icon="icon1.png" tilesize="64" maxhealth="25" money="5" movespeed="60" animationspeed="15" count="20" damage="0">
-            </enemy> 
-            <enemy charset="charset2.png" icon="icon2.png" tilesize="64" maxhealth="350" money="15" movespeed="50" animationspeed="8" count="3" damage="0">
+        </wave>
+
+    	<wave enemydistance="900">
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="43" money="8" movespeed="55" animationspeed="10" count="8" armor="2" attackradius="50" damage="2">
             </enemy>
-            <enemy charset="charset3.png" icon="icon3.png" tilesize="64" maxhealth="400" money="20" movespeed="70" animationspeed="10" count="2" damage="32">
-            </enemy> 
-    	</wave>      
-            
+    		<enemy name="brood" charset="../../../monsters/brood.png" icon="../../../monsters/brood_icon.png" tilesize="64" maxhealth="10" money="3" movespeed="66" animationspeed="15" count="10" armor="1" attackradius="45" damage="1">
+            </enemy>
+        </wave>
+
+    	<wave enemydistance="700">
+    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="39" money="4" movespeed="85" animationspeed="12" count="24" damage="0">
+            </enemy>
+    		<enemy name="warg" charset="../../../monsters/warg.png" icon="../../../monsters/warg_icon.png" tilesize="64" maxhealth="21" money="3" movespeed="120" animationspeed="15" count="16" damage="0">
+            </enemy>
+        </wave>
+
+    	<wave enemydistance="1000">
+    		<enemy name="ogre" charset="../../river_side.xml/data/charset2.png" icon="../../river_side.xml/data/icon2.png" tilesize="64" maxhealth="101" money="12" movespeed="45" animationspeed="8" count="5" attackradius="55" damage="4" lifttime="2500" throwdamage="90" thrower="1" throwrange="150">
+            </enemy>
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="50" money="8" movespeed="55" animationspeed="10" count="6" armor="2" attackradius="50" damage="2">
+            </enemy>
+        </wave>
+
+    	<wave enemydistance="800">
+    		<enemy name="wyvern" charset="../../../monsters/wyvern.png" icon="../../../monsters/wyvern_icon.png" tilesize="64" maxhealth="127" money="10" movespeed="75" animationspeed="15" count="10" attackradius="65" damage="6" flying="1">
+            </enemy>
+    		<enemy name="brood" charset="../../../monsters/brood.png" icon="../../../monsters/brood_icon.png" tilesize="64" maxhealth="36" money="3" movespeed="66" animationspeed="15" count="18" armor="1" attackradius="45" damage="1">
+            </enemy>
+        </wave>
+
+    	<wave enemydistance="900">
+    		<enemy name="troll" charset="../../../monsters/halftroll.png" icon="../../../monsters/halftroll_icon.png" tilesize="64" maxhealth="446" money="18" movespeed="40" animationspeed="8" count="4" armor="1" attackradius="60" damage="8" lifttime="2500" throwdamage="130" thrower="1" throwrange="160">
+            </enemy>
+    		<enemy name="orc" charset="../../../monsters/orc.png" icon="../../../monsters/orc_icon.png" tilesize="64" maxhealth="156" money="8" movespeed="55" animationspeed="10" count="10" armor="2" attackradius="50" damage="2">
+            </enemy>
+    		<enemy name="gnoll" charset="../../../monsters/gnoll.png" icon="../../../monsters/gnoll_icon.png" tilesize="64" maxhealth="62" money="4" movespeed="85" animationspeed="12" count="20" damage="0">
+            </enemy>
+        </wave>
     </waves>
   </enemies>

@@ -14,7 +14,7 @@ import math, os, re, sys
 import xml.etree.ElementTree as ET
 
 DATA = sys.argv[1]
-GOLD_STEP, GOLD_GROWTH = 0.15, 0.8   # the same as gold_difficulty_step / gold_wave_growth in defensemania.cfg (0, 0 = the original flat reward)
+GOLD_STEP, GOLD_GROWTH = 0.10, 0.8   # the same as gold_difficulty_step / gold_wave_growth in defensemania.cfg (0, 0 = the original flat reward)
 
 def gold_factor(d, k, n):
     return (1 + GOLD_STEP * (d - 1)) * (1 + (GOLD_GROWTH * k / (n - 1) if n > 1 else 0))
