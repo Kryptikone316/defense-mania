@@ -574,7 +574,7 @@ static Screen screen_options(int &sel, bool allowReset = true)   /* allowReset i
 		{
 			draw_text("RESET ALL PROGRESS?", SW / 2, by + 12, 24, 0xFFE066, ALIGN_CENTER, 0);
 			draw_text("This erases ALL high scores on every map, Campaign and Endless,\nand every win and perfect score you have earned.", SW / 2, by + 52, 13, 0xFFFFFF, ALIGN_CENTER, 1);
-			draw_text("Normal and Hard close again, and so does Endless mode,\nuntil you earn them again. Your sound and graphics\nsettings are kept.", SW / 2, by + 98, 13, 0xFFE066, ALIGN_CENTER, 1);
+			draw_text("Normal and Hard close again, and so does Endless mode,\nuntil you earn them again.", SW / 2, by + 98, 13, 0xFFE066, ALIGN_CENTER, 1);
 			draw_button("NO", SW / 2 - 150, by + bh - 40, 110, 26, resetSel == 0, 20);
 			draw_button("YES", SW / 2 + 40, by + bh - 40, 110, 26, resetSel == 1, 20);
 		}
