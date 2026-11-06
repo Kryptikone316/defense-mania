@@ -472,20 +472,41 @@ static Screen screen_play()
 		snprintf(b, sizeof b, "Endless unlocks with a perfect\nscore on all three difficulties\nof this map  (%d / 3)", perfect_count(maps[mapPicked]));
 		draw_text(b, 410, 210, 12, 0xB0B0B0, ALIGN_LEFT, 1);
 	}
-	draw_button("BACK", 40, SH - 54, 110, 26, false, 20);
-	draw_button("PLAY", SW - 150, SH - 54, 110, 26, true, 20);
-	draw_hint("Up/Down: map    L1/R1: difficulty    X: mode    A: play    B: back");
+	/* focus: 0 the map list, 1 the BACK button, 2 the PLAY button (Down past the last map reaches them) */
+	static int focus = 0;
+	draw_button("BACK", 40, SH - 54, 110, 26, focus == 1, 20);
+	draw_button("PLAY", SW - 150, SH - 54, 110, 26, focus != 1, 20);
+	if (focus == 1) rect_outline(34, SH - 60, 122, 38, 0x89F9FF, 120);
+	if (focus == 2) rect_outline(SW - 156, SH - 60, 122, 38, 0x89F9FF, 120);
+	draw_hint(focus ? "Left/Right: button    Up: maps    A: choose    B: back" : "Up/Down: map    L1/R1: difficulty    X: mode    A: play    B: back");
 	if (pressed(JK_X) && unlocked) playEndless = !playEndless;
-	if (pressed(JK_UP) && mapPicked > 0) mapPicked--;
-	if (pressed(JK_DOWN) && mapPicked + 1 < count) mapPicked++;
+	if (focus == 0)
+	{
+		if (pressed(JK_UP) && mapPicked > 0) mapPicked--;
+		if (pressed(JK_DOWN))
+		{
+			if (mapPicked + 1 < count) mapPicked++;
+			else focus = 2;
+		}
+	}
+	else
+	{
+		if (pressed(JK_UP)) focus = 0;
+		if (pressed(JK_LEFT)) focus = 1;
+		if (pressed(JK_RIGHT)) focus = 2;
+	}
 	if (pressed(JK_L1) && difficulty > 1) difficulty--;
 	if (pressed(JK_R1) && difficulty < 3)
 	{
 		if (difficulty < open) difficulty++;
 		else lockedMsgUntil = millis() + 3000;
 	}
-	if (pressed(JK_B)) return S_MAIN;
-	if (pressed(JK_A) && !maps.empty()) return S_LOADING;
+	if (pressed(JK_B)) { focus = 0; return S_MAIN; }
+	if (pressed(JK_A))
+	{
+		if (focus == 1) { focus = 0; return S_MAIN; }
+		if (!maps.empty()) { focus = 0; return S_LOADING; }
+	}
 	return S_PLAY;
 }
 
