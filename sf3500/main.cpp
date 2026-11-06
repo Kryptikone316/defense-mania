@@ -935,7 +935,7 @@ struct Play {
 	const char *toast = "";
 };
 
-static Image repairIcon, updateIcon, sellIcon;
+static Image repairIcon, updateIcon, sellIcon, goldIcon;   /* goldIcon: the small nugget after a price */
 
 static void clamp_camera()
 {
@@ -1030,15 +1030,17 @@ static void draw_radial(const Play &p)
 		}
 		draw_image_center(*img, ix, iy, 0, 0, -1, -1, dim ? 200 : 255, dim ? 0x969696 : 0xFFFFFF);
 		char b[24];
-		snprintf(b, sizeof b, "%d $", cost);
+		snprintf(b, sizeof b, "%d", cost);
+		int tw = text_width(b, 10, 2), total = tw + 3 + goldIcon.w, tx = (int)ix - total / 2;   /* the price, then a small nugget */
 		fill_rect((int)(ix - iconSize * 0.5f), (int)(iy + iconSize / 2 - 3), (int)iconSize, 13, 0x000000, 200);
-		draw_text(b, (int)ix, (int)(iy + iconSize / 2 - 3), 10, 0xFFFFFF, ALIGN_CENTER, 2);
+		draw_text(b, tx, (int)(iy + iconSize / 2 - 3), 10, 0xFFFFFF, ALIGN_LEFT, 2);
+		draw_image(goldIcon, tx + tw + 3, (int)(iy + iconSize / 2 - 1));
 	}
 	if (p.menuKind == 3)
 	{
 		const TrapType &t = m->trapTypes[p.menuSel];
 		char b[300];
-		snprintf(b, sizeof b, "%s - %d $   (%d of %d placed)\n%s", t.name.c_str(), t.costs, m->trapCount(p.menuSel), m->trapCap(p.menuSel), t.text.c_str());
+		snprintf(b, sizeof b, "%s - %d gold   (%d of %d placed)\n%s", t.name.c_str(), t.costs, m->trapCount(p.menuSel), m->trapCap(p.menuSel), t.text.c_str());
 		info_box(b);
 	}
 	else if (p.menuKind == 1)
@@ -1046,9 +1048,9 @@ static void draw_radial(const Play &p)
 		const TowerType &t = m->towerTypes[p.menuSel];
 		char b[300];
 		if (t.support)
-			snprintf(b, sizeof b, "%s - %d $\n%s", t.name.c_str(), t.costs, support_text(t.sup[0], m->tileSize).c_str());
+			snprintf(b, sizeof b, "%s - %d gold\n%s", t.name.c_str(), t.costs, support_text(t.sup[0], m->tileSize).c_str());
 		else
-			snprintf(b, sizeof b, "%s - %d $\nDMG: %d   FR: %.1fs   %s%s%s", t.name.c_str(), t.costs, t.damage, (float)t.fireRate / 1000, t.description.c_str(), t.groundOnly ? "  (ground only)" : "", t.chill[0] > 0 ? "  (slowed take more damage)" : "");
+			snprintf(b, sizeof b, "%s - %d gold\nDMG: %d   FR: %.1fs   %s%s%s", t.name.c_str(), t.costs, t.damage, (float)t.fireRate / 1000, t.description.c_str(), t.groundOnly ? "  (ground only)" : "", t.chill[0] > 0 ? "  (slowed take more damage)" : "");
 		info_box(b);
 	}
 	else if (p.menuTower)
@@ -1570,6 +1572,7 @@ int main()
 	}
 	load_image("data/logo_dm.png", logo);
 	load_image("data/repair_icon.png", repairIcon);
+	load_image("data/money_small.png", goldIcon);
 	load_image("data/update_icon.png", updateIcon);
 	load_image("data/sell_icon.png", sellIcon);
 	load_maps();

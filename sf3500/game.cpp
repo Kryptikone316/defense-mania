@@ -2391,7 +2391,7 @@ void Map::drawHud()
 		}
 		draw_image(hudTop, bodyW, 0, hudTop.w - endW, 0, endW, hudTop.h);
 	}
-	draw_image(moneyImg, 8, 9);
+	draw_image(moneyImg, 8, 13);   /* the gold nugget, level with the heart */
 	snprintf(b, sizeof b, "%d", money);
 	draw_text(b, goldX, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
 	snprintf(b, sizeof b, "SCORE %d", runningScore());
