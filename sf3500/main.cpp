@@ -29,7 +29,7 @@ static inline bool held(int jk) { return (padNow >> jk) & 1; }
 static inline bool pressed(int jk) { return held(jk) && !((padPrev >> jk) & 1); }
 
 /* ------------------------------------------------------------------ menu pieces */
-struct MapInfo { std::string name, url, size; Image logo; int perfectBase = 0; };   /* perfectBase: the best possible score at difficulty x1 */
+struct MapInfo { std::string name, url, size; Image logo; int perfectBase = 0; bool needAll = false; };   /* needAll: opens once every other map has been won on Normal */   /* perfectBase: the best possible score at difficulty x1 */
 static std::vector<MapInfo> maps;
 static Image logo;
 static int difficulty = 1;       /* 1 easy, 2 normal, 3 hard */
@@ -207,6 +207,21 @@ static int diff_unlocked_id(const std::string &id)
 	return top >= 3 ? 3 : top + 1;
 }
 
+/* A map with unlock="normal-all" (The Coast) stays closed until every other map has been won on Normal (or Hard, which needs Normal first). */
+static bool map_locked(const MapInfo &m, int *have = NULL, int *need = NULL)
+{
+	int h = 0, n = 0;
+	for (size_t i = 0; i < maps.size(); i++)
+	{
+		if (maps[i].needAll) continue;
+		n++;
+		if (diff_unlocked_id(map_id(maps[i].url)) >= 3) h++;
+	}
+	if (have) *have = h;
+	if (need) *need = n;
+	return m.needAll && h < n;
+}
+
 static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
 {
 	r.endless = m->endless;
@@ -279,6 +294,7 @@ static void load_maps()
 		m.name = ms[i]->str("name");
 		m.url = ms[i]->str("url");
 		m.size = ms[i]->str("size");
+		m.needAll = ms[i]->str("unlock") == "normal-all";
 		load_image("data/maps/" + m.url + "/" + ms[i]->str("img"), m.logo);
 		/* every enemy beaten, every wave cleared, the match won and no life lost */
 		XNode waves, tree;
@@ -444,8 +460,9 @@ static Screen screen_play()
 	{
 		int i = mapScroll + k, y = listTop + k * rowH;
 		bool on = i == mapPicked;
-		draw_text(maps[i].name, listX + 8, y + 2, 18, on ? 0x89F9FF : 0xD0D0D0, ALIGN_LEFT, 0);
-		draw_text(maps[i].size, listX + 280, y + 6, 11, on ? 0x89F9FF : 0x909090, ALIGN_RIGHT, 1);
+		bool shut = map_locked(maps[i]);
+		draw_text(maps[i].name, listX + 8, y + 2, 18, shut ? (on ? 0x8A9A9C : 0x707070) : on ? 0x89F9FF : 0xD0D0D0, ALIGN_LEFT, 0);
+		draw_text(shut ? "LOCKED" : maps[i].size, listX + 280, y + 6, 11, shut ? 0xFFE066 : on ? 0x89F9FF : 0x909090, ALIGN_RIGHT, 1);
 		if (on)
 			rect_outline(listX - 4, y - 4, 304, rowH - 2, 0x89F9FF, 150);
 	}
@@ -460,14 +477,30 @@ static Screen screen_play()
 		if (mapScroll > 0) draw_text("^", barX + 3, trackY - 14, 11, 0x89F9FF, ALIGN_CENTER, 2);
 		if (mapScroll + rows < count) draw_text("v", barX + 3, trackY + trackH + 1, 11, 0x89F9FF, ALIGN_CENTER, 2);
 	}
-	bool unlocked = have && endless_unlocked(maps[mapPicked]);
+	int mapsWon = 0, mapsNeeded = 0;
+	bool shutMap = have && map_locked(maps[mapPicked], &mapsWon, &mapsNeeded);
+	bool unlocked = have && !shutMap && endless_unlocked(maps[mapPicked]);
 	if (!unlocked)
 		playEndless = false;
 	if (have && maps[mapPicked].logo.valid())
+	{
 		draw_image(maps[mapPicked].logo, SW - 70 - maps[mapPicked].logo.w, 98);
+		if (shutMap) fill_rect(SW - 70 - maps[mapPicked].logo.w, 98, maps[mapPicked].logo.w, maps[mapPicked].logo.h, 0x000000, 170);
+	}
+	if (shutMap)
+	{
+		char b[160];
+		snprintf(b, sizeof b, "LOCKED\n\nWin every other map on Normal\nto open this one.\n\n(%d / %d maps won on Normal)", mapsWon, mapsNeeded);
+		draw_text(b, 410, 166, 13, 0xFFE066, ALIGN_LEFT, 1);
+	}
+	else
+	{
 	draw_text("MODE", 410, 166, 11, 0x909090, ALIGN_LEFT, 1);
 	draw_text(playEndless ? "ENDLESS" : "CAMPAIGN", 410, 180, 20, playEndless ? 0xFFE066 : 0xFFFFFF, ALIGN_LEFT, 0);
-	if (unlocked)
+	}
+	if (shutMap)
+		;
+	else if (unlocked)
 		draw_text("X: switch mode", 410, 210, 12, 0xB0B0B0, ALIGN_LEFT, 1);
 	else if (have)
 	{
@@ -508,7 +541,8 @@ static Screen screen_play()
 	if (pressed(JK_A))
 	{
 		if (focus == 1) { focus = 0; return S_MAIN; }
-		if (!maps.empty()) { focus = 0; return S_LOADING; }
+		if (shutMap) sfx_play(SFX_ERROR);   /* a closed map does not start */
+		else if (!maps.empty()) { focus = 0; return S_LOADING; }
 	}
 	return S_PLAY;
 }

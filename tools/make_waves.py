@@ -2,9 +2,10 @@
 """Writes <data>/maps/<map>.xml/waves.xml for every map from ONE table of creatures and one plan per map. Each wave names its creatures and how many;
 the health is then worked out so that the wave asks for the share of the ideal damage (the load, see check_maps.py) the plan sets, on Easy. Normal and Hard
 have two and three times the health and are paid a little more, which is what check_maps.py shows.
-Usage: make_waves.py <the game's data folder>"""
+Usage: make_waves.py <the game's data folder> [map ...]"""
 import os, sys, math
 DATA = sys.argv[1]
+ONLY = sys.argv[2:]   # optional: only these maps (the others keep the waves.xml they have)
 sys.argv = sys.argv[:2]
 exec(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'check_maps.py')).read().split("maps = [l.strip()")[0])
 
@@ -52,13 +53,19 @@ PLANS = {
    (400, {'spider': 70, 'warg': 30}), (350, {'warg': 100}), (350, {'gnoll': 80, 'warg': 40}), (700, {'orc': 20, 'brood': 20}),
    (350, {'warg': 110, 'gnoll': 60, 'orc': 12}), (500, {'ogre': 14, 'orc': 20}), (400, {'wyvern': 30, 'gnoll': 60, 'brood': 40}),
    (350, {'warg': 120, 'gnoll': 80}), (500, {'troll': 10, 'orc': 30, 'wyvern': 16}), (350, {'warg': 120, 'gnoll': 90, 'orc': 24, 'troll': 10, 'ogre': 8, 'wyvern': 16})]),
+ 'coast': (ramp(10, 0.06, 0.31, [(7, 0.85)]), [
+   (400, {'spider': 50, 'warg': 30, 'brood': 12}), (350, {'warg': 70, 'gnoll': 40}), (400, {'brood': 40, 'spider': 40, 'wyvern': 10}),
+   (650, {'orc': 16, 'gnoll': 40, 'brood': 12}), (350, {'warg': 90, 'gnoll': 50, 'ogre': 6}), (450, {'wyvern': 24, 'orc': 14, 'brood': 30}),
+   (450, {'ogre': 10, 'troll': 4, 'warg': 60, 'gnoll': 40}), (350, {'spider': 80, 'warg': 80, 'brood': 40, 'wyvern': 12}),
+   (450, {'troll': 8, 'orc': 26, 'wyvern': 14, 'gnoll': 50}), (350, {'troll': 10, 'ogre': 8, 'orc': 24, 'wyvern': 16, 'warg': 100, 'gnoll': 70, 'brood': 30})]),
 }
 def armor_mult(a):   # an arrow at its best hits for 12: armour takes a flat part off, never more than three quarters
     return 12.0 / max(12.0 - a, 3.0) if a > 0 else 1.0
 def sheet_attr(name): return MON[name]
 # the very large hordes are thinned (and every creature made correspondingly tougher: the load stays the same): a hundred small creatures waste far more shots than the paper model says
-COUNT_SCALE = {'bigger': 0.7, 'tundra': 0.8}
+COUNT_SCALE = {'bigger': 0.7, 'tundra': 0.8, 'coast': 0.7}
 for m, (targets, plan) in PLANS.items():
+    if ONLY and m not in ONLY: continue
     cs = COUNT_SCALE.get(m, 1.0)
     plan = [(sp, dict((t, max(1, int(round(c * cs)))) for t, c in comp.items())) for sp, comp in plan]
     mapdir = os.path.join(DATA, 'maps', m + '.xml')

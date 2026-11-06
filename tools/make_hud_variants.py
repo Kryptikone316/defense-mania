@@ -8,7 +8,7 @@ Bigger keeps the original plank (no file).
 Writes <data>/hud/<map>.png, each 160 x 39: the plank stretched to the width the game lays the gold and lives out for (the game
 stretches the same way for any other width and repeats the strip at columns 70-86, which every variant keeps free of decoration),
 with the decoration baked in. Deterministic: the same files come out every time."""
-import sys, os, random
+import sys, os, random, math
 from PIL import Image
 
 W, H = 160, 39
@@ -200,7 +200,37 @@ def maze(im, top, bot):
     put(im, 121, (bot[121] or 31) - 5, red); put(im, 124, (bot[124] or 31) - 5, red)
     put(im, 121, (bot[121] or 31) - 3, red); put(im, 124, (bot[124] or 31) - 3, red)
 
-MAPS = { 'swamp': swamp, 'tundra': tundra, 'river_side': river, 'woods': woods, 'mountains': mountain, 'maze': maze }
+def coast(im, top, bot):
+    """a salt-bleached plank with a rope along the bottom edge, a starfish and a shell, and a few knots of kelp hanging off the end"""
+    tint(im, (0.93, 0.95, 0.95), (6, 8, 12))
+    rope, rope_l, rope_d = (206, 184, 132, 255), (236, 218, 168, 255), (140, 118, 78, 255)
+    for x in range(2, 150):   # a twisted rope laid along the bottom edge
+        y = (bot[min(x, W - 1)] or 31) - 3
+        put(im, x, y, rope if (x // 2) % 2 else rope_l)
+        put(im, x, y + 1, rope_d if (x // 2) % 2 else rope)
+    for x in (4, 150):        # and its knots
+        y = (bot[x] or 31) - 4
+        for dx in range(-2, 3):
+            for dy in range(-1, 3):
+                put(im, x + dx, y + dy, rope_d if (dx + dy) % 2 else rope_l)
+    star = (232, 120, 70, 255); star_l = (250, 168, 110, 255)   # a starfish tucked in at the top of the right end
+    cx, cy = 150, 12
+    for k in range(5):
+        a = -math.pi / 2 + k * 2 * math.pi / 5
+        for r_ in range(0, 5):
+            put(im, round(cx + math.cos(a) * r_), round(cy + math.sin(a) * r_), star if r_ % 2 else star_l)
+    put(im, cx, cy, star_l)
+    sh = (244, 226, 210, 255); sh_d = (210, 170, 150, 255)       # a scallop shell on the bottom edge
+    for dx in range(-3, 4):
+        for dy in range(-3, 1):
+            if dx * dx + (dy * 1.4) ** 2 <= 10: put(im, 92 + dx, 28 + dy, sh if dx % 2 == 0 else sh_d)
+    put(im, 92, 29, sh_d)
+    kelp = [(96, 130, 60, 255), (62, 96, 44, 255)]
+    for x0, ln in ((26, 5), (58, 4), (118, 6)):                    # kelp under the plank
+        for k in range(ln):
+            put(im, x0 + (1 if (k // 2) % 2 else 0), (bot[x0] or 31) + k, kelp[k % 2])
+
+MAPS = { 'swamp': swamp, 'tundra': tundra, 'river_side': river, 'woods': woods, 'mountains': mountain, 'maze': maze, 'coast': coast }
 
 def main():
     data = sys.argv[1]

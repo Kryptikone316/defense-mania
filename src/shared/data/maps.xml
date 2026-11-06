@@ -9,6 +9,7 @@
     	<map name="The Swamp" img="map_logo.png" url="swamp.xml" size="20 x 15"></map>
     	<map name="The Tundra" img="map_logo.png" url="tundra.xml" size="30 x 16"></map>
     	<map name="Bigger" img="map_logo.png" url="bigger.xml" size="40 x 18"></map>
+    	<map name="The Coast" img="map_logo.png" url="coast.xml" size="40 x 18" unlock="normal-all"></map>
     
     </standardmaps>    
    </campaigns>
