@@ -397,7 +397,7 @@ public:
 	Waves *waves = NULL;
 	int start[2], end[2];
 	std::vector<std::pair<int, int> > way;
-	bool gameStarted = false, defeated = false, pause = false, showBuildAreas = false, quitDialog = false;
+	bool gameStarted = false, defeated = false, pause = false, showBuildAreas = false, pauseMenu = false;
 	int action = 0, actionTimer = 0;
 	int killPoints = 0, wavesCleared = 0;   /* for the score */
 	Stats stats;

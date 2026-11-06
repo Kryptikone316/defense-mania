@@ -341,7 +341,7 @@ static Screen screen_help(int &page)
 		  "CONTROLS\n"
 		  "D-Pad: move the cursor (near the edge it scrolls the map)     A: choose, build, open the menu\n"
 		  "B: close a menu     X: show where towers can go     R1 or R2: double speed\n"
-		  "Start: pause     Select: leave the match" },
+		  "Start: the Bastion menu     Select: pause menu (options, restart, exit)" },
 		{ "TOWERS",
 		  "Press A on a green spot to build. Press A on a tower to upgrade, repair or sell it.\n\n"
 		  "Arrow: balanced and cheap; hits ground and air.\n"
@@ -360,8 +360,8 @@ static Screen screen_help(int &page)
 		  "lift a boulder and throw it at a tower nearby.\n\n"
 		  "Traps only work on creatures that walk. Flyers pass over them." },
 		{ "THE BASTION",
-		  "The keep at your exit. Put the cursor on it and press A. The game stops while its menu is\n"
-		  "open and carries on the moment you close it.\n\n"
+		  "The keep at your exit. Press Start from anywhere, or put the cursor on the keep and press A.\n"
+		  "The game stops while its menu is open and carries on the moment you close it.\n\n"
 		  "RESEARCH: pay gold to improve a tower, a trap or the keep itself. One project at a time;\n"
 		  "once started it cannot be stopped, and it finishes after the number of waves shown.\n"
 		  "Nothing is kept from match to match: every match starts fresh.\n\n"
@@ -847,7 +847,9 @@ struct Play {
 	int menuSel = 0, menuTX = 0, menuTY = 0;
 	Tower *menuTower = NULL;
 	int started = 0;
-	int quitSel = 1;
+	int pmSel = 0, pmArm = -1;   /* the Select menu: the chosen row, and the row that has been pressed once and asks to be pressed again */
+	bool pmOptions = false, restart = false;   /* the Options screen is open over the match; the match is being restarted */
+	int optSel = 0;
 	int speed2 = 0;
 	uint32_t toastUntil = 0;   /* a short notice in the middle of the top edge */
 	const char *toast = "";
@@ -1014,7 +1016,7 @@ static void bastion_open(Play &p)
 static void bastion_input(Play &p)
 {
 	Map *m = p.map;
-	if (pressed(JK_B)) { close_menu(p); return; }
+	if (pressed(JK_B) || pressed(JK_START)) { close_menu(p); return; }
 	if (pressed(JK_L1) || pressed(JK_R1) || pressed(JK_X)) { p.bTab ^= 1; p.bSel = 0; p.bCol = 0; }
 	if (p.bTab == 0)
 	{
@@ -1124,7 +1126,7 @@ static void bastion_draw(const Play &p)
 		}
 		else
 			draw_text("No research under way: one project at a time", 26, 304, 12, 0x909090, ALIGN_LEFT, 1);
-		draw_text("The game is paused here.  D-Pad: choose   L1/R1: tab   A: start (it cannot be stopped)   B: close", SW / 2, SH - 34, 10, 0xB0B0B0, ALIGN_CENTER, 1);
+		draw_text("The game is paused here.  D-Pad: choose   L1/R1: tab   A: start (it cannot be stopped)   B or Start: close", SW / 2, SH - 34, 10, 0xB0B0B0, ALIGN_CENTER, 1);
 	}
 	else
 	{
@@ -1163,7 +1165,7 @@ static void bastion_draw(const Play &p)
 				draw_text(b, 26, 272, 12, 0x89F9FF, ALIGN_LEFT, 1);
 			}
 		}
-		draw_text("The game is paused here.  Up/Down: choose   A: use it   L1/R1: tab   B: close", SW / 2, SH - 34, 10, 0xB0B0B0, ALIGN_CENTER, 1);
+		draw_text("The game is paused here.  Up/Down: choose   A: use it   L1/R1: tab   B or Start: close", SW / 2, SH - 34, 10, 0xB0B0B0, ALIGN_CENTER, 1);
 	}
 }
 
@@ -1201,42 +1203,48 @@ static void move_cursor(Play &p, float dx, float dy, float dtMs)
 static void play_input(Play &p, float dtMs)
 {
 	Map *m = p.map;
-	if (m->gameStarted && !m->pause && !m->defeated && !m->quitDialog)
+	if (m->gameStarted && !m->pause && !m->defeated && !m->pauseMenu)
 		m->stats.playMs += (int)dtMs;
-	if (m->quitDialog)
+	if (m->pauseMenu)   /* the Select menu: Options, Restart Level, Exit to Main Menu (the match is stopped) */
 	{
-		if (pressed(JK_LEFT) || pressed(JK_RIGHT)) p.quitSel = 1 - p.quitSel;
-		if (pressed(JK_B))
-			p.quitSel = 0;
-		if (pressed(JK_A) || pressed(JK_B))
+		if (p.pmOptions) return;   /* the Options screen reads the pad itself */
+		if (pressed(JK_UP)) { p.pmSel = (p.pmSel + 2) % 3; p.pmArm = -1; }
+		if (pressed(JK_DOWN)) { p.pmSel = (p.pmSel + 1) % 3; p.pmArm = -1; }
+		if (pressed(JK_B) || pressed(JK_SELECT))
 		{
-			if (p.quitSel == 1)
-				m->finished = true;   /* the "YES" path: leave the match */
+			m->pauseMenu = false;
+			m->pause = false;
+			globalSpeed = p.speed2 ? 2.0f : 1.0f;
+		}
+		else if (pressed(JK_A))
+		{
+			if (p.pmSel == 0) { p.pmOptions = true; p.optSel = 0; }
+			else if (p.pmArm != p.pmSel) p.pmArm = p.pmSel;   /* these two end the match: ask once more */
 			else
 			{
-				m->quitDialog = false;
-				m->pause = false;
-				globalSpeed = p.speed2 ? 2.0f : 1.0f;
+				p.restart = p.pmSel == 1;
+				m->finished = true;
+				m->finishedWon = false;
 			}
-			if (p.quitSel == 1) m->finishedWon = false;
 		}
 		return;
 	}
 	if (p.menuKind == 4) { bastion_input(p); return; }   /* before Start, Select and R1: the panel uses L1/R1 for its tabs and keeps the game stopped */
 	if (pressed(JK_Y))
 		slotcheck_mark();   /* only does anything with slot_check = 1: saves the driver's frame ring right now */
-	if (pressed(JK_START))
+	if (pressed(JK_START) && !m->defeated)   /* straight to the Bastion's research and actions */
 	{
-		m->pause = !m->pause;
-		globalSpeed = m->pause ? 0.0f : (p.speed2 ? 2.0f : 1.0f);
+		close_menu(p);
+		bastion_open(p);
+		return;
 	}
 	if (pressed(JK_SELECT))
 	{
 		close_menu(p);
-		m->quitDialog = true;
+		m->pauseMenu = true;
 		m->pause = true;
 		globalSpeed = 0;
-		p.quitSel = 0;
+		p.pmSel = 0; p.pmArm = -1; p.pmOptions = false;
 		return;
 	}
 	if ((pressed(JK_R1) || pressed(JK_R2)) && !m->pause && !m->defeated)
@@ -1335,7 +1343,7 @@ static void play_draw(Play &p)
 	drop_menu_if_tower_gone(p);
 	m->displayActions();
 	/* the tile under the cursor */
-	if (!p.menuKind && !m->quitDialog && !m->pause)
+	if (!p.menuKind && !m->pauseMenu && !m->pause)
 	{
 		int wx = (int)p.cx + camX, wy = (int)p.cy + camY;
 		int tx = wx / m->tileSize, ty = wy / m->tileSize;
@@ -1368,24 +1376,31 @@ static void play_draw(Play &p)
 	m->drawHud();
 	if (p.menuKind == 4)
 		bastion_draw(p);   /* over the HUD: it has its own gold line */
-	if (m->pause && !m->quitDialog)
-		draw_text("PAUSED", SW / 2, SH / 2 - 14, 28, 0xFFFFFF, ALIGN_CENTER, 2);
 	if (p.speed2 && !m->pause)
 		draw_text("x2", SW - 70, 19, 14, 0xFFE066, ALIGN_RIGHT, 2, 255, 0x000000);
 	if ((int)millis() < m->noticeUntil)
 		draw_text(m->notice, SW / 2, 68, 18, 0xFFD400, ALIGN_CENTER, 2, 255, 0x000000);
 	if (millis() < p.toastUntil)
 		draw_text(p.toast, SW / 2, 44, 16, 0xFFE066, ALIGN_CENTER, 2, 255, 0x000000);
-	if (m->quitDialog)
+	if (m->pauseMenu)
 	{
-		fill_rect(SW / 2 - 150, SH / 2 - 56, 300, 112, 0x000000, 190);
-		rect_outline(SW / 2 - 150, SH / 2 - 56, 300, 112, 0x89F9FF, 160);
-		draw_text("Do you really want to quit\nand go back to the menu?", SW / 2, SH / 2 - 44, 12, 0xFFFFFF, ALIGN_CENTER, 1);
-		draw_button("NO", SW / 2 - 110, SH / 2 + 12, 70, 26, p.quitSel == 0, 18);
-		draw_button("YES", SW / 2 + 40, SH / 2 + 12, 70, 26, p.quitSel == 1, 18);
+		fill_rect(SW / 2 - 160, SH / 2 - 104, 320, 208, 0x000000, 200);
+		rect_outline(SW / 2 - 160, SH / 2 - 104, 320, 208, 0x89F9FF, 160);
+		draw_text("PAUSED", SW / 2, SH / 2 - 98, 22, 0xFFFFFF, ALIGN_CENTER, 0);
+		static const char *label[3] = { "OPTIONS", "RESTART LEVEL", "EXIT TO MAIN MENU" };
+		static const char *sure[3] = { "", "RESTART? PRESS A", "EXIT? PRESS A" };
+		for (int i = 0; i < 3; i++)
+		{
+			int y = SH / 2 - 58 + i * 40;
+			draw_button(p.pmArm == i ? sure[i] : label[i], SW / 2 - 125, y, 250, 28, p.pmSel == i, 18);
+			if (p.pmSel == i) rect_outline(SW / 2 - 131, y - 6, 262, 40, 0x89F9FF, 120);
+		}
+		draw_text("A: choose    B or Select: back to the game", SW / 2, SH / 2 + 84, 10, 0xB0B0B0, ALIGN_CENTER, 1);
+		if (p.pmOptions && screen_options(p.optSel) == S_MAIN)
+			p.pmOptions = false;
 	}
 	else if (!p.menuKind && !m->gameStarted && (int)millis() - p.started < 15000 && !m->pause)
-		draw_text("D-Pad: move   A: build / select   B: cancel   X: show build spots   R1 / R2: x2 speed   Start: pause   Select: menu",
+		draw_text("D-Pad: move   A: build / select   B: cancel   X: show build spots   R1 / R2: x2 speed   Start: Bastion   Select: menu",
 		          SW / 2, SH - 84, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }
 
@@ -1526,7 +1541,7 @@ int main()
 		padNow = gfx_pad();
 		if (held(JK_START) && held(JK_SELECT) && screen != S_GAME)
 			break;   /* the quit failsafe on every screen but a match, where Select+Start also quits below */
-		if (held(JK_START) && held(JK_SELECT) && play.map && play.map->quitDialog)
+		if (held(JK_START) && held(JK_SELECT) && play.map && play.map->pauseMenu)
 			break;
 
 		if (screen != S_GAME && screen != S_LOADING)
@@ -1721,7 +1736,12 @@ int main()
 			if (play.map->finished)
 			{
 				afterSel = play.map->finishedWon && !play.map->endless ? 1 : 0;   /* after a victory the button is BACK TO MENU, after a defeat PLAY AGAIN */
-				if (play.map->quitDialog && !play.map->finishedWon && !play.map->endless)
+				if (play.restart)
+				{   /* Restart Level from the Select menu: the same map, difficulty and mode again */
+					mapPicked = lastMap; difficulty = lastDifficulty; playEndless = lastEndless;
+					next = S_LOADING;
+				}
+				else if (play.map->pauseMenu && !play.map->finishedWon && !play.map->endless)
 					next = S_MAIN;   /* quit from the pause dialog goes straight back */
 				else
 				{
