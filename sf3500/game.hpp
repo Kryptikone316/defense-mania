@@ -397,6 +397,11 @@ public:
 	Waves *waves = NULL;
 	int start[2], end[2];
 	std::vector<std::pair<int, int> > way;
+	/* A side road of the path (The Maze's northern loop): at way point `from` a creature may go out along `out` to the dead end and come
+	 * back the same way before carrying on. It chooses when it enters, with a chance that depends on the difficulty (Easy, Normal, Hard). */
+	struct Detour { int from = 0; float chance[3] = { 0, 0, 0 }; std::vector<std::pair<int, int> > out; };
+	std::vector<Detour> detours;
+	std::vector<std::pair<int, int> > routeFor(bool flying) const;   /* the way points one new creature walks: the plain way, or with the detours it chose */
 	bool gameStarted = false, defeated = false, pause = false, showBuildAreas = false, pauseMenu = false;
 	int action = 0, actionTimer = 0;
 	int killPoints = 0, wavesCleared = 0;   /* for the score */

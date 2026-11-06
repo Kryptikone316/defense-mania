@@ -423,16 +423,55 @@ static float gold_factor(int difficulty, int wave, int waves)
 bool Map::nearPath(float wx, float wy, float maxDist, float &px, float &py) const
 {
 	float best = 1e30f;
-	for (size_t i = 0; i + 1 < pathPts.size(); i++)
-	{
-		float ax = pathPts[i].first, ay = pathPts[i].second, bx = pathPts[i + 1].first, by = pathPts[i + 1].second;
+	auto segment = [&](float ax, float ay, float bx, float by) {
 		float vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
 		float t = l2 > 0 ? ((wx - ax) * vx + (wy - ay) * vy) / l2 : 0;
 		t = t < 0 ? 0 : t > 1 ? 1 : t;
 		float qx = ax + vx * t, qy = ay + vy * t, d = dist(wx, wy, qx, qy);
 		if (d < best) { best = d; px = qx; py = qy; }
+	};
+	for (size_t i = 0; i + 1 < pathPts.size(); i++)
+		segment(pathPts[i].first, pathPts[i].second, pathPts[i + 1].first, pathPts[i + 1].second);
+	for (size_t k = 0; k < detours.size(); k++)   /* a side road is part of the path too: traps can go there */
+	{
+		float ax = (float)way[detours[k].from - 1].first, ay = (float)way[detours[k].from - 1].second;
+		for (size_t i = 0; i < detours[k].out.size(); i++)
+		{
+			float bx = (float)detours[k].out[i].first, by = (float)detours[k].out[i].second;
+			segment(ax, ay, bx, by);
+			ax = bx; ay = by;
+		}
 	}
 	return best <= maxDist;
+}
+
+std::vector<std::pair<int, int> > Map::routeFor(bool flying) const
+{
+	if (detours.empty() || flying)
+		return way;   /* creatures that fly go straight */
+	static unsigned seed = 2463534242u;
+	seed ^= (unsigned)gnow() * 2654435761u;
+	std::vector<std::pair<int, int> > route;
+	int d = difficulty < 1 ? 0 : difficulty > 3 ? 2 : difficulty - 1;
+	for (size_t i = 0; i < way.size(); i++)
+	{
+		route.push_back(way[i]);
+		for (size_t k = 0; k < detours.size(); k++)
+			if (detours[k].from - 1 == (int)i)
+			{
+				seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;   /* xorshift: a fresh roll for every creature */
+				if ((seed % 10000) / 100.0f < detours[k].chance[d])
+				{
+					const std::vector<std::pair<int, int> > &o = detours[k].out;
+					for (size_t j = 0; j < o.size(); j++) route.push_back(o[j]);                       /* out to the dead end ... */
+					for (size_t j = o.size() - 1; j-- > 0;) route.push_back(o[j]);                     /* ... and back the way it came */
+					route.push_back(way[i]);                                                           /* to the junction, then on */
+				}
+			}
+	}
+	static const bool log = getenv("DM_ROUTELOG") != NULL;   /* test hook: says how many creatures took a side road */
+	if (log) { printf("ROUTE difficulty %d: %s\n", difficulty, route.size() > way.size() ? "detour" : "straight"); fflush(stdout); }
+	return route;
 }
 
 int Map::trapCount(int type) const
@@ -1350,7 +1389,7 @@ void Wave::calcEnemyDistance()
 		{
 			if (!list[i]->wayPointsSet)
 			{
-				list[i]->setWaypoints(g_map->start, g_map->end, g_map->way);
+				list[i]->setWaypoints(g_map->start, g_map->end, g_map->routeFor(list[i]->flying));
 				again = i + 1;
 			}
 		}
@@ -1905,6 +1944,29 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 		else if (k == pts.size() - 1) { end[0] = x; end[1] = y; }
 		else way.push_back(std::make_pair(x, y));
 	}
+	/* <detour from="2" chance="50,30,10">x,y x,y ...</detour>: from is the id of the way point it leaves from */
+	std::vector<const XNode *> dts = wp.list("waypoints/detour");
+	for (size_t k = 0; k < dts.size(); k++)
+	{
+		Detour d;
+		d.from = dts[k]->num("from");
+		float c0 = 50, c1 = 50, c2 = 50;
+		sscanf(dts[k]->str("chance", "50,50,50").c_str(), "%f,%f,%f", &c0, &c1, &c2);
+		d.chance[0] = c0; d.chance[1] = c1; d.chance[2] = c2;
+		const char *t = dts[k]->text.c_str();
+		while (*t)
+		{
+			char *e;
+			long x = strtol(t, &e, 10);
+			if (e == t) { t++; continue; }
+			if (*e != ',') break;
+			long y = strtol(e + 1, &e, 10);
+			d.out.push_back(std::make_pair((int)x, (int)y));
+			t = e;
+		}
+		if (d.from >= 1 && d.from - 1 < (int)way.size() && !d.out.empty())
+			detours.push_back(d);
+	}
 
 	std::vector<const XNode *> tw = ts.list("towers/tower");
 	for (size_t k = 0; k < tw.size(); k++)
@@ -2417,8 +2479,9 @@ void Map::drawHud()
 	/* the three buttons, bottom left, each with the pad button that works it */
 	draw_image(pause ? hudPlay : hudPause, 13, SH - 49);
 	draw_image(hudBuild, 65, SH - 47);
-	draw_image(hudMenu, 105, SH - 47);
-	draw_text("START", 31, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
+	if (bastionImg.valid()) draw_image_scaled(bastionImg, 110, SH - 50, 18, 36);   /* the keep: Start opens its menu */
+	else draw_image(hudMenu, 105, SH - 47);
+	draw_text("SELECT", 31, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);   /* the pause menu */
 	draw_text("X", 76, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
-	draw_text("SELECT", 119, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
+	draw_text("START", 119, SH - 13, 10, 0xFFFFFF, ALIGN_CENTER, 2, 255, 0x000000);
 }

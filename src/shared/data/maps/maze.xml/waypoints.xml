@@ -13,5 +13,6 @@
       <waypoint id='9'>744,312,2</waypoint>
       <waypoint id='10'>744,168,2</waypoint>
       <waypoint id='11'>936,168,1</waypoint>
+      <detour from="2" chance="50,30,10">168,168 456,168 456,360 600,360 600,184</detour>
     </waypoints>
   </pathfinding>
