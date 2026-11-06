@@ -2352,17 +2352,34 @@ void Map::displayActions()
 
 void Map::drawHud()
 {
-	/* money and lives, top left */
-	draw_image(hudTop, 0, 0);
-	draw_image(moneyImg, 8, 9);
+	/* money and lives, top left: room for seven digits of gold, so the plank is stretched to fit and the heart sits after them */
 	char b[32];
+	const int goldX = 26, goldW = text_width("9999999", 13, 2);
+	const int heartX = goldX + goldW + 10, livesX = heartX + 18, plankW = livesX + text_width("999", 13, 2) + 16;
+	if (plankW <= hudTop.w)
+		draw_image(hudTop, 0, 0);
+	else
+	{   /* the plank's left part, its middle repeated as often as needed, then its ragged right end */
+		const int endW = 16, midX = 50, midW = 50;
+		int bodyW = plankW - endW, x = 0;
+		draw_image(hudTop, 0, 0, 0, 0, midX, hudTop.h);
+		x = midX;
+		while (x < bodyW)
+		{
+			int w = bodyW - x < midW ? bodyW - x : midW;
+			draw_image(hudTop, x, 0, midX, 0, w, hudTop.h);
+			x += w;
+		}
+		draw_image(hudTop, bodyW, 0, hudTop.w - endW, 0, endW, hudTop.h);
+	}
+	draw_image(moneyImg, 8, 9);
 	snprintf(b, sizeof b, "%d", money);
-	draw_text(b, 26, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
+	draw_text(b, goldX, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
 	snprintf(b, sizeof b, "SCORE %d", runningScore());
 	draw_text(b, 8, 40, 11, 0xFFFFFF, ALIGN_LEFT, 2, 255, 0x000000);
-	draw_image(lifeImg, 70, 11);
+	draw_image(lifeImg, heartX, 11);
 	snprintf(b, sizeof b, "%d", lifes);
-	draw_text(b, 88, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
+	draw_text(b, livesX, 8, 13, TEXT_GOLD, ALIGN_LEFT, 2, 255, 0x000000);
 	/* wave information, bottom right */
 	draw_image(hudBottom, SW - 400, SH - 50);
 	if (endless)

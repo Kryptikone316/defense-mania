@@ -1685,6 +1685,7 @@ int main()
 			break;
 		case S_GAME:
 			if (getenv("DM_CAMKEEP") && play.map->ok) { camX = (int)play.map->keepX - SW / 2 + atoi(getenv("DM_CAMKEEP")); camY = (int)play.map->keepY - SH / 2 - 20; camera_limits(play.map); }   /* test hook: look at the keep */
+			if (getenv("DM_MONEY") && play.map->ok) play.map->money = atoi(getenv("DM_MONEY"));   /* test hook: a pile of gold */
 			if (getenv("DM_CRASH_TEST") && (int)millis() - play.started > 4000) *(volatile int *)0 = 1;
 			if (getenv("DM_SOLDIERS") && play.map->ok && play.map->waves && play.map->waves->started && play.map->waves->waves[play.map->waves->current]->begun())
 			{   /* test hook: once the first wave is on, sends one soldier of each kind, to see them at work */
