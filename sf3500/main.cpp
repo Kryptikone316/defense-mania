@@ -1,5 +1,6 @@
 /* Defense Mania for the Data Frog SF3500: menus, the pad cursor and the main loop. */
 #include "audio.hpp"
+#include "devhooks.hpp"
 #include "game.hpp"
 #include "hwdisp.hpp"
 #include "joykey.hpp"
@@ -350,7 +351,7 @@ static Screen screen_main(int &sel)
 static Screen screen_help(int &page)
 {
 	struct Page { const char *head, *text; };
-	static const Page pages[6] = {
+	static const Page pages[7] = {
 		{ "THE GAME",
 		  "Creatures march along the path to your exit. Every one that gets through costs a life; lose\n"
 		  "them all and the match is lost. Stop them with towers, traps and the Bastion, and win by\n"
@@ -397,6 +398,17 @@ static Screen screen_help(int &page)
 		  "Fighters guard the last stretch of the path before the keep: they are your last line, for the\n"
 		  "creatures that get past the towers. They are brave but frail and do not stay long. They\n"
 		  "help your towers; they do not replace them." },
+		{ "MAPS, MODES AND PROGRESS",
+		  "Play lists the maps. Every map starts on Easy: win it to open Normal on that map,\n"
+		  "and win Normal to open Hard. L1 and R1 change the difficulty.\n\n"
+		  "A map is won PERFECTLY when every wave is cleared and you finish with at least the\n"
+		  "lives you started with. Perfect wins on all three difficulties of a map open its\n"
+		  "ENDLESS mode (X on the map list): the waves never stop and grow tougher.\n\n"
+		  "THE COAST, the last map, opens once you have won every other map on Normal.\n\n"
+		  "Scores keeps the best runs of every map. In a match, Select pauses and opens a menu\n"
+		  "with Options (change the volume without leaving), Restart Level and Exit to Main\n"
+		  "Menu; Start opens the Bastion. To start over from nothing, Options has RESET\n"
+		  "PROGRESS (it asks twice)." },
 		{ "DOCTRINES AND TIPS",
 		  "Every research tier you finish counts towards its path: Towers, Traps, Garrison or Command.\n"
 		  "At 3, 6 and 9 tiers in one path you earn a doctrine bonus for everything in that path.\n"
@@ -410,14 +422,14 @@ static Screen screen_help(int &page)
 	gfx_clear(0, 0, 0);
 	draw_text("HOW TO PLAY", 24, 10, 28, 0xFFE066, ALIGN_LEFT, 0);
 	char b[16];
-	snprintf(b, sizeof b, "%d / 6", page + 1);
+	snprintf(b, sizeof b, "%d / 7", page + 1);
 	draw_text(b, SW - 24, 18, 16, 0xB0B0B0, ALIGN_RIGHT, 0);
 	draw_text(pages[page].head, 24, 50, 18, 0x89F9FF, ALIGN_LEFT, 0);
 	fill_rect(24, 74, SW - 48, 1, 0xF8DDC2);
 	draw_text(pages[page].text, 24, 84, 12, 0xE6E6E6, ALIGN_LEFT, 1);
 	draw_hint("Left/Right: page     B: back");
-	if (pressed(JK_LEFT)) page = (page + 5) % 6;
-	if (pressed(JK_RIGHT) || pressed(JK_A)) page = (page + 1) % 6;
+	if (pressed(JK_LEFT)) page = (page + 6) % 7;
+	if (pressed(JK_RIGHT) || pressed(JK_A)) page = (page + 1) % 7;
 	if (pressed(JK_B) || pressed(JK_START)) { page = 0; return S_MAIN; }
 	return S_HELP;
 }
@@ -681,8 +693,13 @@ static Screen screen_options(int &sel, bool allowReset = true)   /* allowReset i
 static Screen screen_credits()
 {
 	gfx_clear(0, 0, 0);
-	draw_text("Developed and created by Kris Siepert.\n\nBased on Processing & ProcessingJS.\n\nThis port runs the original game's logic and data\nnatively on the Data Frog SF3500.",
-	          70, 80, 14, 0xE6E6E6, ALIGN_LEFT, 0);
+	draw_text("DEFENSE MANIA", 70, 40, 22, 0xFFE066, ALIGN_LEFT, 0);
+	draw_text("Developed and created by Kris Siepert.\nBased on Processing and ProcessingJS. MIT licence.\n\n"
+	          "This port runs the original game's logic and data\nnatively on the Data Frog SF3500.\n\n"
+	          "Made for this port: the Bastion with its research and\nsoldiers, the traps, the Resupply Depot, the other new\n"
+	          "creatures and towers, the maps The Swamp, The Tundra\nand The Coast, the sound effects and the HUD art.\n"
+	          "The optional music pack is a separate download (CC0).",
+	          70, 84, 13, 0xE6E6E6, ALIGN_LEFT, 1);
 	draw_button("BACK", 40, SH - 54, 110, 26, true, 20);
 	draw_hint("B: back");
 	if (pressed(JK_B) || pressed(JK_A) || pressed(JK_START)) return S_MAIN;
@@ -861,7 +878,7 @@ static void draw_stats(const Result &r)
 	}
 }
 
-static int afterView = getenv("DM_AFTERVIEW") ? 1 : 0;   /* test hook: open on the match stats */
+static int afterView = dm_env("DM_AFTERVIEW") ? 1 : 0;   /* test hook: open on the match stats */
 
 static Screen screen_after(Result &r, int &sel)
 {
@@ -970,11 +987,6 @@ struct Play {
 };
 
 static Image repairIcon, updateIcon, sellIcon, goldIcon;   /* goldIcon: the small nugget after a price */
-
-static void clamp_camera()
-{
-	Map *m = NULL; (void)m;
-}
 
 static void camera_limits(const Map *m)
 {
@@ -1597,7 +1609,7 @@ int main()
 	if (!gfx_init())
 		return 1;
 	slotcheck_start();   /* does nothing unless slot_check = 1 in defensemania.cfg */
-	if (getenv("DM_DISPTEST"))   /* the display test of DefensemaniaDbg: no game, only frames sent to the driver and read back */
+	if (dm_env("DM_DISPTEST"))   /* the display test of DefensemaniaDbg: no game, only frames sent to the driver and read back */
 	{
 		int rc = disptest_run();
 		hwdisp_deinit();
@@ -1614,26 +1626,26 @@ int main()
 	optHQ = cfg_num("hq_graphics", 0) != 0;
 	audio_init();
 	load_settings();
-	if (getenv("DM_HQ")) optHQ = atoi(getenv("DM_HQ")) != 0;   /* test hook */
+	if (dm_env("DM_HQ")) optHQ = atoi(dm_env("DM_HQ")) != 0;   /* test hook */
 	load_scores();
 	music_play_folder("Conquest");
 
 	Screen screen = S_MAIN;
-	const bool autoRun = getenv("DM_AUTOMAP") != NULL;
-	int autoFrames = 0, autoLimit = getenv("DM_AUTOFRAMES") ? atoi(getenv("DM_AUTOFRAMES")) : 6000, autoMinFps = 999, autoStart = 0;
+	const bool autoRun = dm_env("DM_AUTOMAP") != NULL;
+	int autoFrames = 0, autoLimit = dm_env("DM_AUTOFRAMES") ? atoi(dm_env("DM_AUTOFRAMES")) : 6000, autoMinFps = 999, autoStart = 0;
 	if (autoRun)
 	{
-		mapPicked = atoi(getenv("DM_AUTOMAP"));
+		mapPicked = atoi(dm_env("DM_AUTOMAP"));
 		if (mapPicked < 0 || mapPicked >= (int)maps.size()) mapPicked = 0;
-		difficulty = getenv("DM_AUTODIFF") ? atoi(getenv("DM_AUTODIFF")) : 1;
-		playEndless = getenv("DM_AUTOENDLESS") != NULL;
+		difficulty = dm_env("DM_AUTODIFF") ? atoi(dm_env("DM_AUTODIFF")) : 1;
+		playEndless = dm_env("DM_AUTOENDLESS") != NULL;
 		screen = S_LOADING;
 		printf("DBG START map %d (%s) difficulty %d seed %s frames %d speed %s\n", mapPicked, maps.empty() ? "?" : maps[mapPicked].name.c_str(), difficulty,
-		       getenv("DM_SEED") ? getenv("DM_SEED") : "default", autoLimit, getenv("DM_AUTOSPEED") ? getenv("DM_AUTOSPEED") : "4");
+		       dm_env("DM_SEED") ? dm_env("DM_SEED") : "default", autoLimit, dm_env("DM_AUTOSPEED") ? dm_env("DM_AUTOSPEED") : "4");
 		fflush(stdout);
 	}
 	int mainSel = 0, optSel = 0, afterSel = 0, helpPage = 0;
-	if (getenv("DM_HELP")) { screen = S_HELP; helpPage = atoi(getenv("DM_HELP")); }   /* test hook: open on a page of How To Play */
+	if (dm_env("DM_HELP")) { screen = S_HELP; helpPage = atoi(dm_env("DM_HELP")); }   /* test hook: open on a page of How To Play */
 	Result result;
 	Play play;
 	uint32_t lastFrame = millis();
@@ -1647,7 +1659,7 @@ int main()
 		lastFrame = now;
 		static int hitches;
 		static int partsPlay, partsMusic, partsPresent;   /* where the last frame spent its time */
-		if (dt > (getenv("DM_HITCH_MS") ? atof(getenv("DM_HITCH_MS")) : 80) && screen == S_GAME && hitches < 30)   /* a pause in the frames, noted in log.txt */
+		if (dt > (dm_env("DM_HITCH_MS") ? atof(dm_env("DM_HITCH_MS")) : 80) && screen == S_GAME && hitches < 30)   /* a pause in the frames, noted in log.txt */
 		{
 			hitches++;
 			printf("frame hitch: %.0f ms (the frame before spent %d ms in the game, %d ms in the music, %d ms presenting; drawing: map %d, list %d, sprites %d, bars/shots %d ms; %d enemies, %d towers%s)\n", dt, partsPlay, partsMusic, partsPresent,
@@ -1691,18 +1703,18 @@ int main()
 			play.map = new Map("data/maps/" + maps[mapPicked].url, difficulty, playEndless);
 			play.cx = SW / 2;
 			play.cy = SH / 2;
-			if (getenv("DM_CURSOR"))   /* test hook: start the cursor at x,y on the screen */
-				sscanf(getenv("DM_CURSOR"), "%f,%f", &play.cx, &play.cy);
+			if (dm_env("DM_CURSOR"))   /* test hook: start the cursor at x,y on the screen */
+				sscanf(dm_env("DM_CURSOR"), "%f,%f", &play.cx, &play.cy);
 			play.started = (int)millis();
-			if (getenv("DM_BUILDAREAS")) play.map->showBuildAreas = true;   /* test hook */
-			if (getenv("DM_BASTION") && play.map->ok)   /* test hook: opens the Bastion panel (tab 0 research or 1 actions) with a few tiers researched */
+			if (dm_env("DM_BUILDAREAS")) play.map->showBuildAreas = true;   /* test hook */
+			if (dm_env("DM_BASTION") && play.map->ok)   /* test hook: opens the Bastion panel (tab 0 research or 1 actions) with a few tiers researched */
 			{
 				Map *bm = play.map;
 				for (size_t k = 0; k < bm->research.size() && k < 18; k++) bm->research[k].done = (int)(k % 4 > 2 ? 2 : k % 4);
 				bm->researchActive = 0; bm->researchLeft = 2; bm->money = 300;
 				bastion_open(play);
-				play.bTab = atoi(getenv("DM_BASTION")) & 1;
-				if (getenv("DM_BASTION_SEL")) play.bSel = atoi(getenv("DM_BASTION_SEL"));
+				play.bTab = atoi(dm_env("DM_BASTION")) & 1;
+				if (dm_env("DM_BASTION_SEL")) play.bSel = atoi(dm_env("DM_BASTION_SEL"));
 			}
 			camX = camY = 0;
 			if (!play.map->ok)
@@ -1721,10 +1733,10 @@ int main()
 			}
 			break;
 		case S_GAME:
-			if (getenv("DM_CAMKEEP") && play.map->ok) { camX = (int)play.map->keepX - SW / 2 + atoi(getenv("DM_CAMKEEP")); camY = (int)play.map->keepY - SH / 2 - 20; camera_limits(play.map); }   /* test hook: look at the keep */
-			if (getenv("DM_MONEY") && play.map->ok) play.map->money = atoi(getenv("DM_MONEY"));   /* test hook: a pile of gold */
-			if (getenv("DM_CRASH_TEST") && (int)millis() - play.started > 4000) *(volatile int *)0 = 1;
-			if (getenv("DM_SOLDIERS") && play.map->ok && play.map->waves && play.map->waves->started && play.map->waves->waves[play.map->waves->current]->begun())
+			if (dm_env("DM_CAMKEEP") && play.map->ok) { camX = (int)play.map->keepX - SW / 2 + atoi(dm_env("DM_CAMKEEP")); camY = (int)play.map->keepY - SH / 2 - 20; camera_limits(play.map); }   /* test hook: look at the keep */
+			if (dm_env("DM_MONEY") && play.map->ok) play.map->money = atoi(dm_env("DM_MONEY"));   /* test hook: a pile of gold */
+			if (dm_env("DM_CRASH_TEST") && (int)millis() - play.started > 4000) *(volatile int *)0 = 1;
+			if (dm_env("DM_SOLDIERS") && play.map->ok && play.map->waves && play.map->waves->started && play.map->waves->waves[play.map->waves->current]->begun())
 			{   /* test hook: once the first wave is on, sends one soldier of each kind, to see them at work */
 				static bool sent;
 				if (!sent)
@@ -1735,23 +1747,23 @@ int main()
 					for (int k = 0; k < 4; k++) play.map->spawnSoldiers(k, t);
 				}
 				static int since;
-				if (sent && getenv("DM_SOLDKILL") && ++since == atoi(getenv("DM_SOLDKILL")))   /* and, if asked, kills them all some frames later, to see them fall */
+				if (sent && dm_env("DM_SOLDKILL") && ++since == atoi(dm_env("DM_SOLDKILL")))   /* and, if asked, kills them all some frames later, to see them fall */
 				{ gfx_mark_frame(); for (size_t k = 0; k < play.map->soldiers.size(); k++) play.map->soldiers[k].health = -1; }
 			}
-			if (getenv("DM_FAKE_RESULT") && (int)millis() - play.started > (getenv("DM_FAKE_DELAY") ? atoi(getenv("DM_FAKE_DELAY")) : 1500) && !play.map->finished)
+			if (dm_env("DM_FAKE_RESULT") && (int)millis() - play.started > (dm_env("DM_FAKE_DELAY") ? atoi(dm_env("DM_FAKE_DELAY")) : 1500) && !play.map->finished)
 			{   /* test hook: end the match at once with some score */
 				play.map->killPoints = 640;
-				play.map->wavesCleared = atoi(getenv("DM_FAKE_RESULT"));
+				play.map->wavesCleared = atoi(dm_env("DM_FAKE_RESULT"));
 				play.map->finished = true;
-				play.map->finishedWon = getenv("DM_FAKE_WIN") != NULL;
-				if (getenv("DM_FAKE_LIVES")) play.map->lifes = atoi(getenv("DM_FAKE_LIVES"));
+				play.map->finishedWon = dm_env("DM_FAKE_WIN") != NULL;
+				if (dm_env("DM_FAKE_LIVES")) play.map->lifes = atoi(dm_env("DM_FAKE_LIVES"));
 			}
-			if (getenv("DM_AUTOPLAY") || getenv("DM_AUTOMAP"))   /* test hook: builds, upgrades, repairs and sells towers by itself, at speed */
+			if (dm_env("DM_AUTOPLAY") || dm_env("DM_AUTOMAP"))   /* test hook: builds, upgrades, repairs and sells towers by itself, at speed */
 			{
-				static unsigned rnd = getenv("DM_SEED") ? (unsigned)atoi(getenv("DM_SEED")) : 12345;
+				static unsigned rnd = dm_env("DM_SEED") ? (unsigned)atoi(dm_env("DM_SEED")) : 12345;
 				static int n;
 				auto next = [&]() { rnd = rnd * 1103515245u + 12345u; return (int)((rnd >> 8) & 0xFFFF); };
-				globalSpeed = getenv("DM_AUTOSPEED") ? (float)atof(getenv("DM_AUTOSPEED")) : 4.0f;
+				globalSpeed = dm_env("DM_AUTOSPEED") ? (float)atof(dm_env("DM_AUTOSPEED")) : 4.0f;
 				Map *m = play.map;
 				if (++n % 25 == 0 && !m->towerTypes.empty())
 				{
@@ -1768,7 +1780,7 @@ int main()
 					m->towers[next() % m->towers.size()]->repair();
 				if (n % 300 == 0 && m->towers.size() > 6)
 					m->sellTower(m->towers[next() % m->towers.size()]);
-				if (!getenv("DM_AUTOPAN"))   /* wander over the map like a player does, and open and close tower menus */
+				if (!dm_env("DM_AUTOPAN"))   /* wander over the map like a player does, and open and close tower menus */
 				{
 					static int dirFrames;
 					static float adx, ady;

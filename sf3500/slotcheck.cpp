@@ -11,6 +11,9 @@
  * a few milliseconds later and, if it is still wrong, reported in log.txt as SLOTCHECK ANOMALY with the slot and the
  * frame saved to files for a look. Nothing is touched when slot_check is off (the default). */
 #include "slotcheck.hpp"
+#include "devhooks.hpp"
+
+#ifdef DM_TESTHOOKS   /* a diagnostic: left out of the release build, which gets the empty versions at the end of this file */
 #include "gfx.hpp"
 
 #include <errno.h>
@@ -658,7 +661,7 @@ bool slotcheck_start()
 		printf("SLOTCHECK is off: present_480 changes the frame the model expects\n");
 		return false;
 	}
-	if (getenv("DM_SLOTCHECK_FAKE"))
+	if (dm_env("DM_SLOTCHECK_FAKE"))
 	{
 		g_fake = true;
 		g_minAge = 2500000;
@@ -668,9 +671,9 @@ bool slotcheck_start()
 		g_len = g_line * 4320;
 		printf("SLOTCHECK using a FAKE frame buffer (self-check)\n");
 	}
-	else if (getenv("DM_SLOTCHECK_FILE"))
+	else if (dm_env("DM_SLOTCHECK_FILE"))
 	{
-		int fd = open(getenv("DM_SLOTCHECK_FILE"), O_RDONLY);
+		int fd = open(dm_env("DM_SLOTCHECK_FILE"), O_RDONLY);
 		struct stat sb;
 		if (fd < 0 || fstat(fd, &sb) != 0)
 			return false;
@@ -679,7 +682,7 @@ bool slotcheck_start()
 			return false;
 		g_map = (const uint8_t *)m;
 		g_len = (size_t)sb.st_size;
-		printf("SLOTCHECK reading the saved frame buffer %s\n", getenv("DM_SLOTCHECK_FILE"));
+		printf("SLOTCHECK reading the saved frame buffer %s\n", dm_env("DM_SLOTCHECK_FILE"));
 	}
 	else
 	{
@@ -738,7 +741,7 @@ void slotcheck_frame(const uint16_t *canvas, int w, int h)
 	r.t = now_us();
 	__sync_synchronize();
 	g_sent = n + 1;
-	static long markAt = getenv("DM_SLOTCHECK_MARK_AT") ? atol(getenv("DM_SLOTCHECK_MARK_AT")) : -1;   /* test hook */
+	static long markAt = dm_env("DM_SLOTCHECK_MARK_AT") ? atol(dm_env("DM_SLOTCHECK_MARK_AT")) : -1;   /* test hook */
 	if (markAt >= 0 && (long)g_sent == markAt)
 		slotcheck_mark();
 }
@@ -918,3 +921,11 @@ void slotcheck_stop()
 	fflush(stdout);
 	g_on = false;
 }
+
+#else
+bool slotcheck_start() { return false; }
+void slotcheck_frame(const uint16_t *, int, int) {}
+void slotcheck_after_present(const uint16_t *, int, int) {}
+void slotcheck_mark() {}
+void slotcheck_stop() {}
+#endif

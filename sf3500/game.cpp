@@ -1,4 +1,5 @@
 #include "game.hpp"
+#include "devhooks.hpp"
 #include "audio.hpp"
 
 #include <algorithm>
@@ -108,10 +109,10 @@ Enemy::Enemy(const XNode &def, Map *m, const WaveScale &sc) : map(m)
 	liftTime = def.num("lifttime", 2500);
 	if (def.num("attackrate") > 0) fireRate = def.num("attackrate");
 	if (def.num("attackradius") > 0) fireRadius = def.num("attackradius");
-	if (getenv("DM_ALLTHROW")) { thrower = true; liftTime = 1500; }   /* test hooks */
-	if (getenv("DM_THROWRANGE")) throwRange = (float)atof(getenv("DM_THROWRANGE"));
-	if (getenv("DM_ARMOR")) armor = (float)atof(getenv("DM_ARMOR"));
-	flying = def.num("flying") != 0 || getenv("DM_ALLFLY") != NULL;   /* the test hook makes every creature fly */
+	if (dm_env("DM_ALLTHROW")) { thrower = true; liftTime = 1500; }   /* test hooks */
+	if (dm_env("DM_THROWRANGE")) throwRange = (float)atof(dm_env("DM_THROWRANGE"));
+	if (dm_env("DM_ARMOR")) armor = (float)atof(dm_env("DM_ARMOR"));
+	flying = def.num("flying") != 0 || dm_env("DM_ALLFLY") != NULL;   /* the test hook makes every creature fly */
 	moveSpeed = (int)(def.num("movespeed") * sc.speed + 0.5f);
 	money = (int)(def.num("money") * sc.money + 0.5f);
 	goldValue = (float)def.num("money") * sc.money * sc.gold;
@@ -469,7 +470,7 @@ std::vector<std::pair<int, int> > Map::routeFor(bool flying) const
 				}
 			}
 	}
-	static const bool log = getenv("DM_ROUTELOG") != NULL;   /* test hook: says how many creatures took a side road */
+	static const bool log = dm_env("DM_ROUTELOG") != NULL;   /* test hook: says how many creatures took a side road */
 	if (log) { printf("ROUTE difficulty %d: %s\n", difficulty, route.size() > way.size() ? "detour" : "straight"); fflush(stdout); }
 	return route;
 }
@@ -555,7 +556,7 @@ bool Map::throwBoulder(Trap *t, float range, float damage)
 	p.start = (int)gnow(); p.duration = 450; p.damage = damage;
 	projectiles.push_back(p);
 	stats.boulderThrows++;
-	if (getenv("DM_TRAPLOG")) { printf("THROW boulder %d at tower %d,%d for %.0f\n", t->id, towers[best]->position[0], towers[best]->position[1], damage); fflush(stdout); }
+	if (dm_env("DM_TRAPLOG")) { printf("THROW boulder %d at tower %d,%d for %.0f\n", t->id, towers[best]->position[0], towers[best]->position[1], damage); fflush(stdout); }
 	t->health = 0;   /* the boulder is gone from the path */
 	sfx_play(SFX_CATAPULT);
 	return true;
@@ -574,7 +575,7 @@ void Map::updateTraps()
 {
 	int now = (int)gnow();
 	for (size_t i = 0; i < traps.size(); i++) traps[i].attackers = 0;
-	if (getenv("DM_TRAPLOG")) { static int last; if (now - last > 5000) { last = now; for (size_t i = 0; i < traps.size(); i++) printf("TRAPLOG %s health %.0f charges %.0f at game time %d\n", trapTypes[traps[i].type].kind.c_str(), traps[i].health, traps[i].charges, now); fflush(stdout); } }
+	if (dm_env("DM_TRAPLOG")) { static int last; if (now - last > 5000) { last = now; for (size_t i = 0; i < traps.size(); i++) printf("TRAPLOG %s health %.0f charges %.0f at game time %d\n", trapTypes[traps[i].type].kind.c_str(), traps[i].health, traps[i].charges, now); fflush(stdout); } }
 	if (!traps.empty() && waves && waves->started)
 	{
 		Wave *w = waves->waves[waves->current];
@@ -1164,7 +1165,7 @@ void Map::updateSoldiers()
 				else sd.nextHit = now + 100;
 			}
 		}
-		if (getenv("DM_SOLDLOG"))
+		if (dm_env("DM_SOLDLOG"))
 		{
 			static int lastLog;
 			if (now - lastLog > 1500 && i == 0)
@@ -1178,7 +1179,7 @@ void Map::updateSoldiers()
 		}
 		if (gone)
 		{
-			if (getenv("DM_SOLDLOG")) { printf("SOLDEND %s %s age %d/%d hits %d dealt %.0f hp %.0f/%.0f wave %d\n", st.id.c_str(), sd.health <= 0 ? "KILLED" : "time", now - sd.born, sd.life, sd.nhits, sd.dealt, sd.health, sd.maxHealth, waves ? waves->current : -1); fflush(stdout); }
+			if (dm_env("DM_SOLDLOG")) { printf("SOLDEND %s %s age %d/%d hits %d dealt %.0f hp %.0f/%.0f wave %d\n", st.id.c_str(), sd.health <= 0 ? "KILLED" : "time", now - sd.born, sd.life, sd.nhits, sd.dealt, sd.health, sd.maxHealth, waves ? waves->current : -1); fflush(stdout); }
 			Fallen f;
 			f.type = sd.type; f.face = sd.face; f.at = now; f.x = sd.x; f.y = sd.y; f.killed = sd.health <= 0;
 			fallen.push_back(f);
@@ -1473,7 +1474,7 @@ Waves::Waves(const std::string &path, Map *m, bool isEndless) : map(m), endless(
 		WaveScale sc0;
 		sc0.gold = gold_factor(m->difficulty, 0, 1);
 		waves.push_back(new Wave(spacing[0], templates[0], m, sc0));
-		if (getenv("DM_ENDLESS_DUMP"))
+		if (dm_env("DM_ENDLESS_DUMP"))
 			for (int k = 0; k < 40; k++) { current = k; ensureNext(); }
 		current = 0;
 	}
@@ -1497,7 +1498,7 @@ void Waves::ensureNext()
 	size_t t = (size_t)w % templates.size();
 	int dist = (int)(spacing[t] * fmaxf(0.6f, 1.0f - 0.01f * w));
 	waves.push_back(new Wave(dist, templates[t], map, sc));
-	if (getenv("DM_ENDLESS_DUMP"))   /* test hook: what each endless wave is made of */
+	if (dm_env("DM_ENDLESS_DUMP"))   /* test hook: what each endless wave is made of */
 	{
 		int hp = 0;
 		for (size_t i = 0; i < waves.back()->list.size(); i++) hp += waves.back()->list[i]->maxHealthValue();
@@ -2306,8 +2307,8 @@ void Map::display()
 	for (size_t i = 0; i < g_graveyard.size(); i++)
 		delete g_graveyard[i];
 	g_graveyard.clear();
+#ifdef DM_TESTHOOKS   /* the ghost hunt (a test build only): a tower drawn last frame but not this one, or a tower picture drawn where no tower is */
 	{
-		/* the ghost hunt: a tower drawn last frame but not this one, or a tower picture drawn where no tower is */
 		static int logged = 0;
 		if (logged < 60)
 		{
@@ -2347,6 +2348,7 @@ void Map::display()
 			}
 		}
 	}
+#endif
 	uint32_t p4 = millis();
 	g_prof[0] = (int)(p1 - p0);   /* map picture and build areas */
 	g_prof[1] = (int)(p2 - p1);   /* making the list of what to draw */

@@ -1,4 +1,5 @@
 #include "hwaudio.hpp"
+#include "devhooks.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,8 +122,8 @@ static int try_init(void) {
 int hwaudio_init(void) {
     if (g_active) return 0;
 
-    if (getenv("DM_FAKE_HWAUDIO")) {
-        g_fakeSpeed = atoi(getenv("DM_FAKE_HWAUDIO"));
+    if (dm_env("DM_FAKE_HWAUDIO")) {
+        g_fakeSpeed = atoi(dm_env("DM_FAKE_HWAUDIO"));
         p_init = fake_init; p_play = fake_play; p_deinit = fake_deinit;
     } else {
     g_handle = dlopen("/mnt/sdcard/cubegm/driver_sf3500.so", RTLD_NOW | RTLD_GLOBAL);

@@ -1,4 +1,5 @@
 #include "audio.hpp"
+#include "devhooks.hpp"
 #include "gfx.hpp"
 #include "sf3500_mixer.hpp"
 
@@ -241,7 +242,7 @@ void audio_shutdown()
 
 void music_play_folder(const std::string &folder)
 {
-	if ((!g_ok && !getenv("DM_MUSICTEST")) || folder == g_folder)
+	if ((!g_ok && !dm_env("DM_MUSICTEST")) || folder == g_folder)
 		return;
 	g_folder = folder;
 	drop();
@@ -251,10 +252,10 @@ void music_play_folder(const std::string &folder)
 
 void music_update()
 {
-	if (!g_ok && !getenv("DM_MUSICTEST"))
+	if (!g_ok && !dm_env("DM_MUSICTEST"))
 		return;
 	static int stressCount;   /* test hook: a new track every 25 frames, to shake out thread problems */
-	static const bool stress = getenv("DM_MUSIC_STRESS") != NULL;
+	static const bool stress = dm_env("DM_MUSIC_STRESS") != NULL;
 	if (stress && g_enabled && ++stressCount % 25 == 0)
 		pick_and_play();
 	if (g_loadState == 2)

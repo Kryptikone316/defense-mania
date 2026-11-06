@@ -7,7 +7,7 @@
 
 void audio_init();                                  /* the mixer; silent when there is no sound device */
 void audio_shutdown();
-void music_play_folder(const std::string &folder);  /* music/<folder>/*.ogg; keeps playing if it is already this folder */
+void music_play_folder(const std::string &folder);  /* the .ogg files of music/<folder>; keeps playing if it is already this folder */
 void music_update();                                /* once a frame: starts the next track when one ends */
 void music_set_volume(int percent);                 /* 0..100, 0 = no music */
 int music_volume();

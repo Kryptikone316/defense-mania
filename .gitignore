@@ -5,3 +5,4 @@ obj-sf3500/
 *.mipsel
 *.orig
 *.rej
+obj-sf3500-dev/

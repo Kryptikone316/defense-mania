@@ -75,15 +75,15 @@ Take a look [here](https://github.com/DefenseMania/defense-mania-graphics).
 
 ## Datafrog SF3500 port (branch `sf3500`)
 
-`sf3500/` holds a native C++ port for the Datafrog SF3500 (TreeFrogUI, MIPS32r2, SDL 1.2): the game logic is a translation of the
-Processing code in `src/shared/code`, reading the same XML/PNG data in `src/shared/data` (plus a few additions: DejaVu fonts, 18 synthesised
-sound effects, two extra maps, The Swamp redrawn and The Tundra). It uses the device's own display, audio and gamepad modules, so it needs
-only SDL 1.2 and a classic SDL_ttf.
+`sf3500/` holds a native C++ port for the Datafrog SF3500 (TreeFrogUI, MIPS32r2, SDL 1.2): the game logic is a translation of the Processing code in
+`src/shared/code`, reading the same XML/PNG data in `src/shared/data`, plus what was added for the port: a research keep (the Bastion) with soldiers and
+special actions, path traps, a Resupply Depot, new creatures, difficulty progression, Endless mode, high scores, sound effects, and three more maps
+(The Swamp, The Tundra and The Coast). It uses the device's own display, audio and gamepad modules, so it needs only SDL 1.2 and a classic SDL_ttf.
 
 ```text
 MIPS_PREFIX=/path/to/mips-mti-linux-gnu- SYSROOT=/path/to/sysroot SDL_TTF_DIR=/path/to/SDL_ttf-1.2.11 ./build_sf3500.sh
 ```
 
-`defensemania.cfg` (picture tuning, volumes, frame cap, endless-mode growth) is read from the port folder. `tools/` has the scripts that
-made the sound effects, the loudness table for the optional music pack, and the two generated maps. The notes on how a rare one-frame
-display glitch was traced (`slot_check` in the cfg, `sf3500/slotcheck.cpp`) are in the comments of those files.
+`defensemania.cfg` (picture tuning, volumes, frame cap, game balance) is read from the port folder. `tools/` has the scripts that made the sound effects,
+the art, the maps and the waves, and that check whether every map is winnable. How to build the test version, the test hooks, the tools and the map
+files are described in [`sf3500/DEV-NOTES.md`](sf3500/DEV-NOTES.md).

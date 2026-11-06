@@ -1,5 +1,6 @@
 #include <time.h>
 #include "gfx.hpp"
+#include "devhooks.hpp"
 #include "slotcheck.hpp"
 #include "hwdisp.hpp"
 #include "joykey.hpp"
@@ -52,10 +53,12 @@ static void cfg_load()
 
 double cfg_num(const char *key, double def)
 {
-	char envName[80];   /* DMCFG_<key> overrides the file: the display test compares settings in one run */
+#ifdef DM_TESTHOOKS
+	char envName[80];   /* a test build: DMCFG_<key> in the environment overrides the file */
 	snprintf(envName, sizeof envName, "DMCFG_%s", key);
-	if (const char *ev = getenv(envName))
+	if (const char *ev = dm_env(envName))
 		return atof(ev);
+#endif
 	std::map<std::string, double>::const_iterator it = g_cfg.find(key);
 	return it == g_cfg.end() ? def : it->second;
 }
@@ -137,7 +140,7 @@ static unsigned pad_script(unsigned bits)
 	if (!init)
 	{
 		init = 1;
-		script = getenv("DM_PAD");
+		script = dm_env("DM_PAD");
 		const char *s = script;
 		while (s && *s && n < 512)
 		{
@@ -168,14 +171,14 @@ void gfx_mark_frame() { g_markFrame = g_curFrame; }   /* test hook: shots listed
 static void dump_frame(int frame)
 {
 	g_curFrame = frame;
-	static const char *dir = getenv("DM_SHOTDIR");
+	static const char *dir = dm_env("DM_SHOTDIR");
 	static int list[64], nlist = -1;
 	if (!dir)
 		return;
 	if (nlist < 0)
 	{
 		nlist = 0;
-		const char *s = getenv("DM_SHOTS");
+		const char *s = dm_env("DM_SHOTS");
 		while (s && *s && nlist < 64)
 		{
 			list[nlist++] = (int)strtol(s, (char **)&s, 10);

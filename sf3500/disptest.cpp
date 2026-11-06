@@ -13,6 +13,9 @@
  *      keeps looking at all 36 slots: every slot must look like A or B. A slot that is neither (re-read to rule out a
  *      write in progress) is the artifact: it is logged with the part of the picture that differs and saved to a file.
  * It runs the whole series with music playing and once more without. Select + Start leaves at any time. */
+#include "devhooks.hpp"
+
+#ifdef DM_TESTHOOKS   /* a development tool: left out of the release build */
 #include "audio.hpp"
 #include "gfx.hpp"
 #include "hwdisp.hpp"
@@ -122,7 +125,7 @@ static void present_frame()
 
 static void fb_probe()
 {
-	if (getenv("DM_DISPTEST_FAKEFB"))
+	if (dm_env("DM_DISPTEST_FAKEFB"))
 	{
 		g_fake = true;
 		g_fakeFb = (uint8_t *)calloc(1, g_lineBytes * 4320);
@@ -464,7 +467,7 @@ static void run_pattern(const Pattern &p, bool withReads)
 {
 	if (abort_requested())
 		return;
-	int frames = getenv("DM_DISPTEST_QUICK") ? p.frames / 8 + 1 : p.frames;
+	int frames = dm_env("DM_DISPTEST_QUICK") ? p.frames / 8 + 1 : p.frames;
 	printf("DISP == %s: %d frames%s\n", p.name, frames, withReads ? ", with continuous read-back of all slots" : ", timing only");
 	fflush(stdout);
 	Stat present;
@@ -557,7 +560,7 @@ int disptest_run()
 	printf("DISP read-back is %s\n", g_fb.ok ? "possible (/dev/fb0 mapped)" : "NOT possible (only timing will be measured)");
 	fflush(stdout);
 	audio_init();
-	bool music = getenv("DM_DISPTEST_NOMUSIC") == NULL;
+	bool music = dm_env("DM_DISPTEST_NOMUSIC") == NULL;
 	if (music)
 	{
 		music_play_folder("The Maze");
@@ -580,3 +583,7 @@ int disptest_run()
 	audio_shutdown();
 	return 0;
 }
+
+#else
+int disptest_run() { return 1; }
+#endif
