@@ -389,7 +389,7 @@ public:
 	float moneyCarry = 0;   /* the fractions of gold not paid out yet, so small rewards still add up exactly */
 	int award(float gold);   /* pays out gold, returns the whole gold given */
 	Image565 mapImage, areasImage;   /* areasImage: the map with the build areas baked in, made the first time they are shown */
-	Image lightRay, hudTop, hudBottom, moneyImg, lifeImg, hudPause, hudPlay, hudBuild, hudMenu;
+	Image lightRay, hudTop, hudTopMap, hudBottom, moneyImg, lifeImg, hudPause, hudPlay, hudBuild, hudMenu;
 	std::vector<int> tileType;   /* cols*rows */
 	CharSets charSets;
 	std::vector<TowerType> towerTypes;

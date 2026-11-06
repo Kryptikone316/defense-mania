@@ -2050,6 +2050,11 @@ Map::Map(const std::string &mapPath, int diff, bool isEndless) : path(mapPath), 
 	if (!load_image565(path + "/data/map.png", mapImage))
 		return;
 	load_image("data/hud_top.png", hudTop);
+	{   /* a map may have its own plank (data/hud/<map>.png, 160 wide); a map without one uses the plain plank */
+		std::string hp = "data/hud/" + id + ".png";
+		FILE *hf = fopen(hp.c_str(), "rb");
+		if (hf) { fclose(hf); load_image(hp, hudTopMap); }
+	}
 	load_image("data/hud_bottom.png", hudBottom);
 	load_image("data/money.png", moneyImg);
 	load_image("data/bastion.png", bastionImg);
@@ -2356,7 +2361,21 @@ void Map::drawHud()
 	char b[32];
 	const int goldX = 26, goldW = text_width("9999999", 13, 2);
 	const int heartX = goldX + goldW + 10, livesX = heartX + 18, plankW = livesX + text_width("999", 13, 2) + 16;
-	if (plankW <= hudTop.w)
+	if (hudTopMap.valid())
+	{   /* the map's own plank, 160 wide: its end stays at the right edge; a different width repeats the plain strip at columns 70-86 or crops */
+		const int endW = 16, stripX = 70, stripW = 16, w = hudTopMap.w;
+		int bodyW = plankW - endW;
+		if (bodyW > w - endW)
+		{
+			draw_image(hudTopMap, 0, 0, 0, 0, w - endW, hudTopMap.h);
+			for (int x = w - endW; x < bodyW; x += stripW)
+				draw_image(hudTopMap, x, 0, stripX, 0, bodyW - x < stripW ? bodyW - x : stripW, hudTopMap.h);
+		}
+		else
+			draw_image(hudTopMap, 0, 0, 0, 0, bodyW, hudTopMap.h);
+		draw_image(hudTopMap, bodyW, 0, w - endW, 0, endW, hudTopMap.h);
+	}
+	else if (plankW <= hudTop.w)
 		draw_image(hudTop, 0, 0);
 	else
 	{   /* the plank's left part, its middle repeated as often as needed, then its ragged right end */
