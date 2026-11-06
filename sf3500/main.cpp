@@ -5,6 +5,7 @@
 #include "joykey.hpp"
 #include "slotcheck.hpp"
 
+#include <algorithm>
 #include <SDL.h>
 #include <sys/stat.h>
 #include <math.h>
@@ -100,7 +101,7 @@ static std::string music_folder_for(const std::string &url, const std::string &n
 
 /* ------------------------------------------------------------------ high scores */
 /* One player profile: each map keeps its best scores over all difficulties, with the difficulty and the wave reached. */
-struct ScoreEntry { int score = 0, difficulty = 2, waves = 0, total = 0; bool won = false; };
+struct ScoreEntry { int score = 0, difficulty = 2, waves = 0, total = 0; bool won = false, perfect = false; };   /* perfect: every wave cleared, no life lost (set by the match itself, never worked out from the score) */
 static std::map<std::string, std::vector<ScoreEntry> > scoreTables;   /* by map id, best first */
 static const int SCORE_ROWS = 8;
 static std::map<std::string, int> perfectMask;   /* by map id: bit d-1 is set once difficulty d was played perfectly */
@@ -115,7 +116,7 @@ static void load_scores()
 	if (!f)
 		return;
 	char line[200], id[64];
-	int diff, score, waves, total, won;
+	int diff, score, waves, total, won, perfect;
 	while (fgets(line, sizeof line, f))
 	{
 		int mask;
@@ -129,10 +130,11 @@ static void load_scores()
 			wonMask[id] |= mask;
 			continue;
 		}
-		if (sscanf(line, "%63s %d %d %d %d %d", id, &diff, &score, &waves, &total, &won) == 6)
+		perfect = 0;
+		if (sscanf(line, "%63s %d %d %d %d %d %d", id, &diff, &score, &waves, &total, &won, &perfect) >= 6)
 		{
 			ScoreEntry e;
-			e.score = score; e.difficulty = diff; e.waves = waves; e.total = total; e.won = won != 0;
+			e.score = score; e.difficulty = diff; e.waves = waves; e.total = total; e.won = won != 0; e.perfect = perfect != 0;
 			scoreTables[id].push_back(e);
 			if (e.won && strncmp(id, "endless:", 8) != 0 && diff >= 1 && diff <= 3)   /* scores saved before the wins were counted */
 				wonMask[id] |= 1 << (diff - 1);
@@ -154,7 +156,7 @@ static void save_scores()
 		for (size_t i = 0; i < it->second.size(); i++)
 		{
 			const ScoreEntry &e = it->second[i];
-			fprintf(f, "%s %d %d %d %d %d\n", it->first.c_str(), e.difficulty, e.score, e.waves, e.total, e.won);
+			fprintf(f, "%s %d %d %d %d %d %d\n", it->first.c_str(), e.difficulty, e.score, e.waves, e.total, e.won, e.perfect);
 		}
 	fclose(f);
 }
@@ -184,6 +186,7 @@ struct Result {
 	bool won = false;
 	float mult = 1;
 	int winBonus = 0, lifeBonus = 0, waveBonus = 0, perfect = 0, perfectBase = 0;
+	bool perfectRun = false;     /* won, every wave cleared and no life lost: the only thing that counts as a perfect score */
 	int rank = -1;               /* place in the table, -1 when it did not make it */
 	Stats stats;
 	std::vector<std::string> towerNames, trapNames;
@@ -191,7 +194,6 @@ struct Result {
 	int newUnlock = 0;           /* a difficulty this win opened, 0 for none */
 };
 
-static float diff_mult(int d) { return d == 1 ? 1.0f : d == 2 ? 1.5f : 2.0f; }
 
 /* Every map starts on Easy; winning a map on one difficulty opens the next one on that map (Easy, Normal, Hard). */
 static int diff_unlocked_id(const std::string &id)
@@ -232,8 +234,9 @@ static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
 	r.perfectBase = m->endless ? 0 : info.perfectBase;
 	r.perfect = (int)(r.perfectBase * r.mult);
 	r.score = (int)((r.kills + r.waveBonus + r.winBonus + r.lifeBonus) * r.mult);
+	r.perfectRun = won && !m->endless && r.totalWaves > 0 && r.wavesCleared >= r.totalWaves && r.lives >= m->baseLifes;
 	ScoreEntry e;
-	e.score = r.score; e.difficulty = r.difficulty; e.waves = r.wavesCleared; e.total = r.totalWaves; e.won = won;
+	e.score = r.score; e.difficulty = r.difficulty; e.waves = r.wavesCleared; e.total = r.totalWaves; e.won = won; e.perfect = r.perfectRun;
 	if (won && !m->endless)
 	{
 		int before = diff_unlocked_id(r.mapId);
@@ -242,7 +245,7 @@ static void make_result(Result &r, const Map *m, bool won, const MapInfo &info)
 		r.newUnlock = after > before ? after : 0;
 	}
 	r.rank = add_score(m->endless ? "endless:" + r.mapId : r.mapId, e);
-	if (!m->endless && r.perfect > 0 && r.score >= r.perfect)   /* remembered for good, for the endless unlock */
+	if (r.perfectRun)   /* remembered for good, for the endless unlock */
 	{
 		perfectMask[r.mapId] |= 1 << (r.difficulty - 1);
 		save_scores();
@@ -257,7 +260,7 @@ static int perfect_bits(const MapInfo &m)
 	int bits = perfectMask.count(id) ? perfectMask[id] : 0;
 	const std::vector<ScoreEntry> &t = scoreTables[id];
 	for (size_t i = 0; i < t.size(); i++)
-		if (t[i].won && m.perfectBase > 0 && t[i].score >= (int)(m.perfectBase * diff_mult(t[i].difficulty)))
+		if (t[i].perfect && t[i].won)
 			bits |= 1 << (t[i].difficulty - 1);
 	return bits;
 }
@@ -604,7 +607,7 @@ static void draw_table(const std::string &mapId, int x, int y, int highlight, in
 			draw_text(b, x + 190, ry, 16, col, ALIGN_RIGHT, 0);
 			snprintf(b, sizeof b, "%d", t[i].score);
 			draw_text(b, x + 310, ry, 16, col, ALIGN_RIGHT, 0);
-			if (perfectBase > 0 && t[i].score >= (int)(perfectBase * diff_mult(t[i].difficulty)))
+			if (perfectBase > 0 && t[i].perfect)
 				draw_text("PERFECT", x + 248, ry + 3, 10, hl ? 0xFFFFFF : 0xFFD400, ALIGN_RIGHT, 2);
 		}
 		else
@@ -804,11 +807,11 @@ static Screen screen_after(Result &r, int &sel)
 	}
 	else if (r.perfect > 0)
 	{
-		if (r.score >= r.perfect)
+		if (r.perfectRun)
 			draw_text("PERFECT SCORE!", 24, y + 34, 18, 0xFFD400, ALIGN_LEFT, 0);
 		else
 		{
-			snprintf(b, sizeof b, "Perfect score: %d  (%d%%)", r.perfect, r.score * 100 / r.perfect);
+			snprintf(b, sizeof b, "Perfect score: %d  (%d%%)", r.perfect, std::min(99, r.score * 100 / r.perfect));   /* 100 % is only for a run that qualifies */
 			draw_text(b, 24, y + 34, 13, 0xFFE066, ALIGN_LEFT, 1);
 			if (r.rank >= 0)
 				draw_text(r.rank == 0 ? "NEW BEST SCORE!" : "NEW HIGH SCORE!", 24, y + 54, 16, 0xFFD400, ALIGN_LEFT, 0);
@@ -816,7 +819,7 @@ static Screen screen_after(Result &r, int &sel)
 	}
 
 	if (r.newUnlock)
-		draw_text(r.newUnlock == 2 ? "NORMAL DIFFICULTY UNLOCKED!" : "HARD DIFFICULTY UNLOCKED!", 24, y + (r.score >= r.perfect && r.perfect > 0 ? 62 : 80), 14, 0x89F9FF, ALIGN_LEFT, 2, 255, 0x000000);
+		draw_text(r.newUnlock == 2 ? "NORMAL DIFFICULTY UNLOCKED!" : "HARD DIFFICULTY UNLOCKED!", 24, y + (r.perfectRun ? 62 : 80), 14, 0x89F9FF, ALIGN_LEFT, 2, 255, 0x000000);
 
 	draw_table(r.endless ? "endless:" + r.mapId : r.mapId, 300, 14, r.rank, r.perfectBase);
 
@@ -1626,6 +1629,7 @@ int main()
 				play.map->wavesCleared = atoi(getenv("DM_FAKE_RESULT"));
 				play.map->finished = true;
 				play.map->finishedWon = getenv("DM_FAKE_WIN") != NULL;
+				if (getenv("DM_FAKE_LIVES")) play.map->lifes = atoi(getenv("DM_FAKE_LIVES"));
 			}
 			if (getenv("DM_AUTOPLAY") || getenv("DM_AUTOMAP"))   /* test hook: builds, upgrades, repairs and sells towers by itself, at speed */
 			{
