@@ -513,7 +513,19 @@ static Screen screen_play()
 	return S_PLAY;
 }
 
-static Screen screen_options(int &sel)
+/* a clean slate: every score, win and perfect mark goes; the sound and graphics settings stay */
+static void reset_all_progress()
+{
+	scoreTables.clear();
+	perfectMask.clear();
+	wonMask.clear();
+	save_scores();
+}
+
+static int resetStage = 0, resetSel = 0;   /* the two "are you sure" screens of Options: 0 closed, 1 the first, 2 the last */
+static uint32_t resetDoneUntil = 0;
+
+static Screen screen_options(int &sel, bool allowReset = true)   /* allowReset is off when Options is opened from inside a match */
 {
 	gfx_clear(0, 0, 0);
 	const char *name[5] = { "VOLUME", "MUSIC", "EFFECTS", "HQ GRAPHICS", "SHOW FPS" };
@@ -541,9 +553,68 @@ static Screen screen_options(int &sel)
 	}
 	draw_button("BACK", 40, SH - 54, 110, 26, sel == 5, 20);
 	if (sel == 5) rect_outline(34, SH - 60, 122, 38, 0x89F9FF, 120);
-	draw_hint("Up/Down: choose    Left/Right or A: change    B: back");
-	if (pressed(JK_UP) && sel > 0) sel--;
-	if (pressed(JK_DOWN) && sel < 5) sel++;
+	if (allowReset)
+	{
+		draw_button("RESET PROGRESS", SW - 270, SH - 54, 230, 26, sel == 6, 20);
+		if (sel == 6)
+		{
+			rect_outline(SW - 276, SH - 60, 242, 38, 0x89F9FF, 120);
+			draw_text("Erases every score and unlocked difficulty.\nYou will be asked twice.", SW - 155, SH - 100, 11, 0xE6E6E6, ALIGN_CENTER, 1);
+		}
+		if (millis() < resetDoneUntil)
+			draw_text("All progress erased. A fresh start.", SW / 2, SH - 100, 14, 0x89F9FF, ALIGN_CENTER, 2, 255, 0x000000);
+	}
+	if (resetStage)   /* over everything: the two confirmation screens */
+	{
+		fill_rect(0, 0, SW, SH, 0x000000, 215);
+		int bx = 60, by = 60, bwid = SW - 120, bh = 220;
+		fill_rect(bx - 2, by - 2, bwid + 4, bh + 4, resetStage == 2 ? 0xFF7070 : 0xF8DDC2);
+		fill_rect(bx, by, bwid, bh, 0x101010);
+		if (resetStage == 1)
+		{
+			draw_text("RESET ALL PROGRESS?", SW / 2, by + 12, 24, 0xFFE066, ALIGN_CENTER, 0);
+			draw_text("This erases ALL high scores on every map, Campaign and Endless,\nand every win and perfect score you have earned.", SW / 2, by + 52, 13, 0xFFFFFF, ALIGN_CENTER, 1);
+			draw_text("Normal and Hard close again, and so does Endless mode,\nuntil you earn them again. Your sound and graphics\nsettings are kept.", SW / 2, by + 98, 13, 0xFFE066, ALIGN_CENTER, 1);
+			draw_button("NO", SW / 2 - 150, by + bh - 40, 110, 26, resetSel == 0, 20);
+			draw_button("YES", SW / 2 + 40, by + bh - 40, 110, 26, resetSel == 1, 20);
+		}
+		else
+		{
+			draw_text("ARE YOU REALLY SURE?", SW / 2, by + 12, 24, 0xFF7070, ALIGN_CENTER, 0);
+			draw_text("Every score and every bit of progress will be gone for good.", SW / 2, by + 58, 14, 0xFFFFFF, ALIGN_CENTER, 1);
+			draw_text("The game will be exactly as it was the first time you started it.", SW / 2, by + 86, 14, 0xFFFFFF, ALIGN_CENTER, 1);
+			draw_text("THIS CANNOT BE UNDONE.", SW / 2, by + 126, 16, 0xFF9090, ALIGN_CENTER, 2);
+			draw_button("NO, KEEP IT", SW / 2 - 190, by + bh - 40, 160, 26, resetSel == 0, 20);
+			draw_button("YES, ERASE ALL", SW / 2 + 20, by + bh - 40, 180, 26, resetSel == 1, 20);
+		}
+		draw_hint("Left/Right: choose    A: confirm    B: cancel");
+		if (pressed(JK_LEFT) || pressed(JK_RIGHT)) resetSel ^= 1;
+		if (pressed(JK_B)) resetStage = 0;
+		else if (pressed(JK_A))
+		{
+			if (resetSel == 0) resetStage = 0;
+			else if (resetStage == 1) { resetStage = 2; resetSel = 0; }   /* the last screen starts on NO again */
+			else
+			{
+				reset_all_progress();
+				resetStage = 0;
+				resetDoneUntil = millis() + 4000;
+			}
+		}
+		return S_OPTIONS;
+	}
+	draw_hint(allowReset ? "Up/Down: choose    Left/Right or A: change    B: back" : "Up/Down: choose    Left/Right or A: change    B: back to the pause menu");
+	if (sel >= 5)   /* the bottom row: BACK on the left, RESET PROGRESS on the right */
+	{
+		if (pressed(JK_UP)) sel = 4;
+		if (allowReset && pressed(JK_RIGHT)) sel = 6;
+		if (pressed(JK_LEFT)) sel = 5;
+	}
+	else
+	{
+		if (pressed(JK_UP) && sel > 0) sel--;
+		if (pressed(JK_DOWN)) sel++;
+	}
 	int step = (pressed(JK_RIGHT) ? 10 : 0) - (pressed(JK_LEFT) ? 10 : 0);
 	if (sel == 0 && step) audio_set_master(audio_master() + step);
 	if (sel == 1 && step) music_set_volume(music_volume() + step);
@@ -552,6 +623,12 @@ static Screen screen_options(int &sel)
 	{
 		save_settings();
 		return S_MAIN;
+	}
+	if (pressed(JK_A) && sel == 6)
+	{
+		resetStage = 1;
+		resetSel = 0;   /* NO is where the cursor starts */
+		return S_OPTIONS;
 	}
 	if (pressed(JK_A))
 	{
@@ -1399,7 +1476,7 @@ static void play_draw(Play &p)
 			if (p.pmSel == i) rect_outline(SW / 2 - 131, y - 6, 262, 40, 0x89F9FF, 120);
 		}
 		draw_text("A: choose    B or Select: back to the game", SW / 2, SH / 2 + 84, 10, 0xB0B0B0, ALIGN_CENTER, 1);
-		if (p.pmOptions && screen_options(p.optSel) == S_MAIN)
+		if (p.pmOptions && screen_options(p.optSel, false) == S_MAIN)
 			p.pmOptions = false;
 	}
 	else if (!p.menuKind && !m->gameStarted && (int)millis() - p.started < 15000 && !m->pause)
